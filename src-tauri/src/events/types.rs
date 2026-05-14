@@ -56,6 +56,7 @@ pub struct ShortcutUpdatedPayload {
 /// Every event the backend can emit. The associated `name()` is the stable
 /// string the frontend listens on.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AppEvent {
     AppReady,
     SettingsChanged,

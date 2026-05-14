@@ -27,6 +27,7 @@ impl ShortcutRepo {
     }
 
     /// Fetch one shortcut by id.
+    #[allow(dead_code)]
     pub async fn get(&self, id: &str) -> AppResult<ShortcutItem> {
         let item: Option<ShortcutItem> = sqlx::query_as(
             "SELECT id, label, hint, icon_name, accelerator, action, enabled

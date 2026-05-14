@@ -1,7 +1,6 @@
 //! SQLite connection pool creation and migration running.
 
 use std::path::Path;
-use std::str::FromStr;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
@@ -38,6 +37,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> AppResult<()> {
 /// Create an in-memory pool with migrations applied — for tests only.
 #[cfg(test)]
 pub async fn test_pool() -> SqlitePool {
+    use std::str::FromStr;
     let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

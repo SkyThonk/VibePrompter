@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::services::{CatalogService, HistoryService, SettingsService, ShortcutService};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AppState {
     pub config: Config,
     pub settings: SettingsService,

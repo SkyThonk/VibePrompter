@@ -38,14 +38,19 @@ pub enum AppError {
     Validation(String),
 
     // Dormant variants — defined now so the taxonomy is stable; used by later sub-projects.
+    #[allow(dead_code)]
     #[error("provider error: {0}")]
     Provider(String),
+    #[allow(dead_code)]
     #[error("network error: {0}")]
     Network(String),
+    #[allow(dead_code)]
     #[error("clipboard error: {0}")]
     Clipboard(String),
+    #[allow(dead_code)]
     #[error("shortcut error: {0}")]
     Shortcut(String),
+    #[allow(dead_code)]
     #[error("permission error: {0}")]
     Permission(String),
 }

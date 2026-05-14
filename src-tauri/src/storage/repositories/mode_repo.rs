@@ -29,6 +29,7 @@ impl ModeRepo {
     }
 
     /// Fetch one prompt mode by id.
+    #[allow(dead_code)]
     pub async fn get(&self, id: &str) -> AppResult<PromptMode> {
         let mode: Option<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,

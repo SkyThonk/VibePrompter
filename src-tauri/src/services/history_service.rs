@@ -26,6 +26,7 @@ impl HistoryService {
     }
 
     /// Record a completed transformation. Used by sub-project 2.
+    #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {
         self.repo.insert(&item).await
     }

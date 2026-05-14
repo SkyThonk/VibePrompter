@@ -26,6 +26,7 @@ pub struct HistoryItem {
 
 /// Input for inserting a new history record (used by sub-project 2).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct NewHistoryItem {
     pub mode_name: String,
     pub icon_name: String,
