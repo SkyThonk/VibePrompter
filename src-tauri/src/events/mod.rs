@@ -1,1 +1,7 @@
-// populated in a later task
+//! Application-wide event system.
+
+pub mod bus;
+pub mod types;
+
+pub use bus::EventBus;
+pub use types::AppEvent;
