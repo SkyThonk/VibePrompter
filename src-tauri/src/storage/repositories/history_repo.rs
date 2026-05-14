@@ -116,4 +116,14 @@ mod tests {
         let q = HistoryQuery { limit: 2, offset: 0 };
         assert_eq!(repo.list(&q).await.unwrap().len(), 2);
     }
+
+    #[tokio::test]
+    async fn purge_older_than_removes_old_rows() {
+        let repo = HistoryRepo::new(test_pool().await);
+        repo.insert(&sample()).await.unwrap();
+        // A timestamp in the far future — everything is "older than" this.
+        let removed = repo.purge_older_than("2099-01-01T00:00:00Z").await.unwrap();
+        assert_eq!(removed, 1);
+        assert!(repo.list(&HistoryQuery::default()).await.unwrap().is_empty());
+    }
 }

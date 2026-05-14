@@ -37,8 +37,12 @@ impl ProviderRepo {
 
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let extra: serde_json::Value =
-                serde_json::from_str(&row.extra).unwrap_or(serde_json::Value::Null);
+            let row_id = row.id.clone();
+            let extra: serde_json::Value = serde_json::from_str(&row.extra)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("provider `{}` has malformed extra JSON: {e}", row_id);
+                    serde_json::Value::Null
+                });
             out.push(ProviderInfo {
                 id: row.id,
                 name: row.display_name,
