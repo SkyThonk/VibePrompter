@@ -1,1 +1,3 @@
-// populated in a later task
+//! Application composition root.
+
+pub mod logging;
