@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   I,
   Kbd,
@@ -7,6 +8,7 @@ import {
   ProviderGlyphs,
   SelectCard,
 } from '@shared/ui';
+import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { useProvidersQuery, useModesQuery } from '../application/setup.query';
 import { useValidateKeyMutation } from '../application/validateKey.command';
 import type { ProviderId } from '../domain';
@@ -21,6 +23,7 @@ const GLYPHS: Record<ProviderId, () => React.ReactNode> = {
 };
 
 export function SetupScreen() {
+  const navigate = useNavigate();
   const [provider, setProvider] = useState<ProviderId>('openai');
   const [apiKey, setApiKey] = useState('sk-proj-7Kx9_••••••••••••••••••••••••PqR4');
   const [keyVis, setKeyVis] = useState(false);
@@ -213,11 +216,28 @@ export function SetupScreen() {
             You can change all of this later in Settings · <span className="kbd">⌘</span>
             <span className="kbd ml-px">,</span>
           </span>
-          <PhButton variant="ghost" size="md">
+          <PhButton
+            variant="ghost"
+            size="md"
+            onClick={() => {
+              invokeCommand<void>('mark_first_run_done')
+                .catch(() => {})
+                .finally(() => navigate('/'));
+            }}
+          >
             Skip for now
           </PhButton>
-          <PhButton variant="primary" size="md" icon={<I.bolt size={14} />}>
-            Launch Assistant
+          <PhButton
+            variant="primary"
+            size="md"
+            icon={<I.bolt size={14} />}
+            onClick={() => {
+              invokeCommand<void>('mark_first_run_done')
+                .catch(() => {})
+                .finally(() => navigate('/'));
+            }}
+          >
+            Launch VibePrompter
           </PhButton>
         </div>
       </div>

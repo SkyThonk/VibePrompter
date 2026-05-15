@@ -53,7 +53,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn migrations_create_all_six_tables() {
+    async fn migrations_create_all_tables() {
         let pool = test_pool().await;
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -62,7 +62,13 @@ mod tests {
                 .unwrap();
         let names: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
         for expected in [
-            "analytics", "history", "prompt_modes", "providers", "settings", "shortcuts",
+            "analytics",
+            "history",
+            "prompt_modes",
+            "provider_connections",
+            "providers",
+            "settings",
+            "shortcuts",
         ] {
             assert!(names.contains(&expected), "missing table: {expected}");
         }

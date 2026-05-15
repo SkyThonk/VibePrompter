@@ -3,7 +3,10 @@
 //! (every field is `Clone` and internally `Arc`-backed or a pool handle).
 
 use crate::config::Config;
-use crate::services::{CatalogService, HistoryService, SettingsService, ShortcutService};
+use crate::services::{
+    CatalogService, ConnectionService, HistoryService, PromptService, SettingsService,
+    ShortcutService,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,4 +17,6 @@ pub struct AppState {
     pub history: HistoryService,
     pub shortcuts: ShortcutService,
     pub catalog: CatalogService,
+    pub connections: ConnectionService,
+    pub prompts: PromptService,
 }

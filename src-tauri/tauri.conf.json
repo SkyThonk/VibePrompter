@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "vibeprompter",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.vibeprompter.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
@@ -12,11 +12,29 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "VibePrompter",
-        "width": 800,
-        "height": 600,
+        "width": 1100,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 480,
         "resizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "mode-hud",
+        "title": "VibePrompter Mode HUD",
+        "width": 320,
+        "height": 88,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "focus": false,
+        "shadow": false,
+        "center": true
       }
     ],
     "security": {

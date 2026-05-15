@@ -1,10 +1,10 @@
 ---
 active: true
-iteration: 1
-session_id: 47828d28-843f-481e-9d39-17244bf5791b
-max_iterations: 0
+iteration: 5
+session_id: b62542f7-25a2-4592-aec5-6bf5de926525
+max_iterations: 20
 completion_promise: null
-started_at: "2026-05-15T04:31:53Z"
+started_at: "2026-05-15T09:16:27Z"
 ---
 
-Polish the existing Tauri+React UI to feel like Raycast/Linear on Windows 11 per docs/superpowers/specs/ui-polish.md — iterate on visual hierarchy, animations, native window chrome, command palette feel, settings UX
+now I wanted it should be actual working windows app rather than web where in page we have window like screen there and everything like from tray, overlay, app and when we use shortcut there is transparent icon with telling this happened like mode swith and current mode as it fade way like this

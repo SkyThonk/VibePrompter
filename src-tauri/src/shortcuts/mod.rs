@@ -1,2 +1,91 @@
-//! OS-level global hotkey registration and conflict detection.
-//! Owned by sub-project 3 — OS Integration. Intentionally empty for now.
+//! OS-level global hotkey registration. Reads shortcut bindings from the
+//! `shortcuts` table (via `ShortcutService`) so the accelerators the user sees
+//! in Settings are the same ones that actually trigger. Actions that don't
+//! yet have a backend (rewrite/grammar/summarize — provider sub-project) are
+//! registered but no-op with a debug log, so the keys round-trip cleanly.
+
+use std::collections::HashMap;
+use std::str::FromStr;
+
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+use crate::utils::{AppError, AppResult};
+
+pub async fn init(app: &AppHandle) -> AppResult<()> {
+    let state = app
+        .try_state::<crate::app::state::AppState>()
+        .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
+    let items = state.shortcuts.list().await?;
+
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all(); // idempotent — safe on first call
+
+    // Pre-pass: warn about duplicate accelerators across enabled shortcuts.
+    // The global-shortcut plugin would silently bind the first and reject the
+    // rest — surfacing the conflict in the log helps the user notice their
+    // Settings change collided with another binding.
+    let mut by_accel: HashMap<String, Vec<&str>> = HashMap::new();
+    for item in items.iter().filter(|i| i.enabled) {
+        by_accel
+            .entry(item.accelerator.clone())
+            .or_default()
+            .push(&item.id);
+    }
+    for (accel, ids) in by_accel.iter().filter(|(_, v)| v.len() > 1) {
+        tracing::warn!(
+            "shortcut accelerator '{accel}' bound to multiple actions ({}); first wins",
+            ids.join(", ")
+        );
+    }
+
+    for item in items {
+        if !item.enabled {
+            continue;
+        }
+        let shortcut = match Shortcut::from_str(&item.accelerator) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "skipping shortcut '{}': cannot parse accelerator '{}': {e}",
+                    item.id,
+                    item.accelerator
+                );
+                continue;
+            }
+        };
+        let action = item.action.clone();
+        let id = item.id.clone();
+        let accel = item.accelerator.clone();
+
+        if let Err(e) = gs.on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            dispatch(app, &action);
+        }) {
+            tracing::warn!("failed to register {id} ({accel}): {e}");
+        } else {
+            tracing::info!("global shortcut registered: {} → {}", accel, item.action);
+        }
+    }
+
+    Ok(())
+}
+
+/// Map a shortcut's `action` string to the corresponding backend behavior.
+/// Unknown actions are logged at debug level and do nothing — they exist as
+/// seeded rows for sub-project 2 to implement.
+fn dispatch(app: &AppHandle, action: &str) {
+    match action {
+        "mode_switch" => {
+            if let Err(e) = crate::tray::cycle_mode(app) {
+                tracing::warn!("mode_switch dispatch failed: {e}");
+            }
+        }
+        "open_palette" => crate::tray::toggle_main_window(app),
+        other => {
+            tracing::debug!("shortcut action '{other}' has no backend yet");
+        }
+    }
+}

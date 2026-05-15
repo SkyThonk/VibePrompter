@@ -61,7 +61,6 @@ impl HistoryRepo {
     }
 
     /// Delete history rows older than the given RFC3339 timestamp.
-    #[allow(dead_code)]
     pub async fn purge_older_than(&self, cutoff_rfc3339: &str) -> AppResult<u64> {
         let affected = sqlx::query("DELETE FROM history WHERE created_at < ?1")
             .bind(cutoff_rfc3339)

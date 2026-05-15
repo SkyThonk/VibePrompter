@@ -24,6 +24,16 @@ impl SettingsRepo {
         Ok(rows)
     }
 
+    /// Read one row by key. Returns `None` if the key is absent — the caller
+    /// decides whether that's a default or an error.
+    pub async fn get_one(&self, key: &str) -> AppResult<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(v,)| v))
+    }
+
     /// Upsert one key with its JSON-encoded value.
     pub async fn upsert(&self, key: &str, json_value: &str) -> AppResult<()> {
         let now = chrono::Utc::now().to_rfc3339();

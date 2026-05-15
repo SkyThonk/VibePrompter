@@ -32,6 +32,19 @@ impl SettingsService {
         Ok(settings)
     }
 
+    /// Read a single key from the underlying KV table. Used for ephemeral
+    /// app state (e.g. last-active mode) that doesn't belong on the typed
+    /// `Settings` aggregate. Returns the raw JSON-encoded string.
+    pub async fn get_kv(&self, key: &str) -> AppResult<Option<String>> {
+        self.repo.get_one(key).await
+    }
+
+    /// Upsert a raw KV entry without firing `settings_changed`. Use for
+    /// ephemeral state that shouldn't ripple into the UI's settings reload.
+    pub async fn set_kv(&self, key: &str, json_value: &str) -> AppResult<()> {
+        self.repo.upsert(key, json_value).await
+    }
+
     /// Persist a full `Settings` aggregate — one upsert per field — then emit
     /// `settings_changed`.
     pub async fn save(&self, settings: &Settings) -> AppResult<()> {
