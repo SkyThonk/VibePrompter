@@ -13,7 +13,7 @@ pub use prompt_mode::PromptMode;
 pub use provider::ProviderInfo;
 pub use provider_connection::{
     ChatMessage, CompletionParams, CompletionResult, ConnectionInfo, ConnectionInput,
-    ConnectionKind,
+    ConnectionKind, TokenUsage,
 };
 pub use settings::Settings;
 pub use shortcut::{ShortcutConfig, ShortcutItem};

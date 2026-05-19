@@ -20,7 +20,7 @@ impl ModeRepo {
     pub async fn list(&self) -> AppResult<Vec<PromptMode>> {
         let modes: Vec<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
-                    provider_override, icon_name
+                    provider_override, icon_name, tags
              FROM prompt_modes ORDER BY sort_order ASC",
         )
         .fetch_all(&self.pool)
@@ -29,17 +29,63 @@ impl ModeRepo {
     }
 
     /// Fetch one prompt mode by id.
-    #[allow(dead_code)]
     pub async fn get(&self, id: &str) -> AppResult<PromptMode> {
         let mode: Option<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
-                    provider_override, icon_name
+                    provider_override, icon_name, tags
              FROM prompt_modes WHERE id = ?1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
         mode.ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: id.to_string() })
+    }
+
+    pub async fn upsert(&self, mode: &PromptMode, sort_order: i64) -> AppResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO prompt_modes
+               (id, name, description, system_prompt, temperature, max_tokens,
+                provider_override, icon_name, tags, is_default, sort_order,
+                created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+               name = ?2, description = ?3, system_prompt = ?4,
+               temperature = ?5, max_tokens = ?6, provider_override = ?7,
+               icon_name = ?8, tags = ?9, sort_order = ?10, updated_at = ?11",
+        )
+        .bind(&mode.id)
+        .bind(&mode.name)
+        .bind(&mode.description)
+        .bind(&mode.system_prompt)
+        .bind(mode.temperature)
+        .bind(mode.max_tokens)
+        .bind(&mode.provider_override)
+        .bind(&mode.icon_name)
+        .bind(&mode.tags)
+        .bind(sort_order)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: &str) -> AppResult<()> {
+        sqlx::query("DELETE FROM prompt_modes WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Highest current sort_order. Used when inserting a new mode so it lands
+    /// at the bottom of the list by default.
+    pub async fn max_sort_order(&self) -> AppResult<i64> {
+        let row: (Option<i64>,) =
+            sqlx::query_as("SELECT MAX(sort_order) FROM prompt_modes")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0.unwrap_or(0))
     }
 }
 

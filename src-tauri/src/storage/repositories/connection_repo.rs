@@ -18,6 +18,15 @@ pub struct ConnectionRow {
     pub api_key: String,
     pub default_model: String,
     pub is_default: bool,
+    /// JSON-encoded `{ "Header-Name": "value", ... }`. Empty string when
+    /// none configured. Parsed by the HTTP layer on each request.
+    pub extra_headers: String,
+    /// RFC3339 timestamp of the last successful call through this
+    /// connection. Empty string = never used.
+    pub last_used_at: String,
+    /// Free-text notes attached to the connection (rate limit reminders,
+    /// account ownership, etc.). Empty string when none.
+    pub notes: String,
 }
 
 #[derive(Clone)]
@@ -31,16 +40,17 @@ impl ConnectionRepo {
     }
 
     pub async fn list(&self) -> AppResult<Vec<ConnectionRow>> {
-        let rows: Vec<(String, String, String, String, String, String, bool)> =
+        let rows: Vec<(String, String, String, String, String, String, bool, String, String, String)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default
-                 FROM provider_connections ORDER BY is_default DESC, created_at ASC",
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes
+                 FROM provider_connections
+                 ORDER BY is_default DESC, last_used_at DESC, created_at ASC",
             )
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
             .into_iter()
-            .map(|(id, label, kind, base_url, api_key, default_model, is_default)| ConnectionRow {
+            .map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes)| ConnectionRow {
                 id,
                 label,
                 kind,
@@ -48,20 +58,23 @@ impl ConnectionRepo {
                 api_key,
                 default_model,
                 is_default,
+                extra_headers,
+                last_used_at,
+                notes,
             })
             .collect())
     }
 
     pub async fn get(&self, id: &str) -> AppResult<ConnectionRow> {
-        let row: Option<(String, String, String, String, String, String, bool)> =
+        let row: Option<(String, String, String, String, String, String, bool, String, String, String)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes
                  FROM provider_connections WHERE id = ?1",
             )
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.map(|(id, label, kind, base_url, api_key, default_model, is_default)| ConnectionRow {
+        row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes)| ConnectionRow {
             id,
             label,
             kind,
@@ -69,19 +82,27 @@ impl ConnectionRepo {
             api_key,
             default_model,
             is_default,
+            extra_headers,
+            last_used_at,
+            notes,
         })
         .ok_or_else(|| AppError::NotFound { entity: "provider_connection", id: id.to_string() })
     }
 
     pub async fn upsert(&self, row: &ConnectionRow) -> AppResult<()> {
+        // Upsert intentionally does NOT touch `last_used_at` — that's the
+        // job of `touch_last_used()` after a successful completion. Editing
+        // a connection's label shouldn't reset its recency.
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO provider_connections
-               (id, label, kind, base_url, api_key, default_model, is_default, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+               (id, label, kind, base_url, api_key, default_model, is_default,
+                extra_headers, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
              ON CONFLICT(id) DO UPDATE SET
                label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
-               default_model = ?6, is_default = ?7, updated_at = ?8",
+               default_model = ?6, is_default = ?7, extra_headers = ?8,
+               notes = ?9, updated_at = ?10",
         )
         .bind(&row.id)
         .bind(&row.label)
@@ -90,9 +111,23 @@ impl ConnectionRepo {
         .bind(&row.api_key)
         .bind(&row.default_model)
         .bind(row.is_default)
+        .bind(&row.extra_headers)
+        .bind(&row.notes)
         .bind(now)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Stamp the connection as used "now". Called after every successful
+    /// completion so the providers list can sort by recency.
+    pub async fn touch_last_used(&self, id: &str) -> AppResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE provider_connections SET last_used_at = ?1 WHERE id = ?2")
+            .bind(&now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -116,14 +151,14 @@ impl ConnectionRepo {
     }
 
     pub async fn get_default(&self) -> AppResult<Option<ConnectionRow>> {
-        let row: Option<(String, String, String, String, String, String, bool)> =
+        let row: Option<(String, String, String, String, String, String, bool, String, String, String)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes
                  FROM provider_connections WHERE is_default = 1 LIMIT 1",
             )
             .fetch_optional(&self.pool)
             .await?;
-        Ok(row.map(|(id, label, kind, base_url, api_key, default_model, is_default)| {
+        Ok(row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes)| {
             ConnectionRow {
                 id,
                 label,
@@ -132,6 +167,9 @@ impl ConnectionRepo {
                 api_key,
                 default_model,
                 is_default,
+                extra_headers,
+                last_used_at,
+                notes,
             }
         }))
     }

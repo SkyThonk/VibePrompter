@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { I, PanelHead, PhButton, PhInput, Pill } from '@shared/ui';
+import { I, PanelHead, PhButton, PhInput, Pill, useToast } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 /**
@@ -24,6 +24,9 @@ interface Connection {
   hasKey: boolean;
   defaultModel: string;
   isDefault: boolean;
+  extraHeaders: string;
+  lastUsedAt: string;
+  notes: string;
 }
 
 interface ConnectionDraft {
@@ -34,6 +37,8 @@ interface ConnectionDraft {
   apiKey: string;
   defaultModel: string;
   isDefault: boolean;
+  extraHeaders: string;
+  notes: string;
 }
 
 const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' | 'anthropic'; model: string }> = {
@@ -57,13 +62,20 @@ const emptyDraft = (): ConnectionDraft => ({
   apiKey: '',
   defaultModel: '',
   isDefault: false,
+  extraHeaders: '',
+  notes: '',
 });
 
 export function ProvidersPanel() {
+  const toast = useToast();
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<ConnectionDraft | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // Inline feedback for state directly tied to the form (Save / Test) — toasts
+  // are reserved for transient app-level events (import/export, connection
+  // works, etc.). Inline keeps Save context next to the editor.
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
 
@@ -111,20 +123,64 @@ export function ProvidersPanel() {
     setBusy(`del:${id}`);
     try {
       await invokeCommand<void>('delete_connection', { id });
+      setSelected((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
       await reload();
     } finally {
       setBusy(null);
     }
   };
 
+  const removeSelected = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`Delete ${selected.size} connection${selected.size === 1 ? '' : 's'}? Their API keys will be removed from the keyring too.`)) {
+      return;
+    }
+    setBusy('bulk:del');
+    try {
+      // Serial — each deletion touches the keyring; running them in parallel
+      // can race the platform credential store on some backends.
+      for (const id of selected) {
+        try {
+          await invokeCommand<void>('delete_connection', { id });
+        } catch (e) {
+          toast.err(`Failed to delete ${id}: ${errorMsg(e)}`);
+        }
+      }
+      setSelected(new Set());
+      await reload();
+      toast.ok('Selected connections deleted.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleOne = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const toggleAll = () =>
+    setSelected((s) =>
+      s.size === connections.length ? new Set() : new Set(connections.map((c) => c.id))
+    );
+
   const test = async (id: string) => {
     setBusy(`test:${id}`);
-    setFeedback(null);
+    const label = connections.find((c) => c.id === id)?.label ?? 'Connection';
     try {
-      await invokeCommand<void>('test_connection', { id });
-      setFeedback({ kind: 'ok', msg: 'Connection works.' });
+      const r = await invokeCommand<{ model: string; latencyMs: number }>(
+        'test_connection',
+        { id }
+      );
+      toast.ok(`${r.model} · ${r.latencyMs}ms`, `${label} works`);
     } catch (e) {
-      setFeedback({ kind: 'err', msg: errorMsg(e) });
+      toast.err(errorMsg(e), `${label} failed`);
     } finally {
       setBusy(null);
     }
@@ -160,6 +216,53 @@ export function ProvidersPanel() {
     }
   };
 
+  const exportConnections = async () => {
+    try {
+      const payload = await invokeCommand<unknown>('export_connections');
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vibeprompter-connections-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.ok('Exported connections (API keys excluded).', 'Export complete');
+    } catch (e) {
+      toast.err(errorMsg(e), 'Export failed');
+    }
+  };
+
+  const importConnections = () => {
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = 'application/json';
+    file.onchange = async () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const payload = JSON.parse(text);
+        const overwrite = window.confirm(
+          'Overwrite existing connections that have matching IDs? Cancel to skip duplicates.'
+        );
+        const count = await invokeCommand<number>('import_connections', {
+          payload,
+          overwrite,
+        });
+        await reload();
+        toast.ok(
+          `Imported ${count} connection${count === 1 ? '' : 's'}. Add API keys before use.`,
+          'Import complete'
+        );
+      } catch (e) {
+        toast.err(errorMsg(e), 'Import failed');
+      }
+    };
+    file.click();
+  };
+
   const beginEdit = (c: Connection) => {
     setDraft({
       id: c.id,
@@ -169,6 +272,8 @@ export function ProvidersPanel() {
       apiKey: '', // empty means "preserve existing"
       defaultModel: c.defaultModel,
       isDefault: c.isDefault,
+      extraHeaders: c.extraHeaders ?? '',
+      notes: c.notes ?? '',
     });
     setModels([]);
     setKeyVisible(false);
@@ -213,12 +318,49 @@ export function ProvidersPanel() {
               No connections yet. Add one to start running real prompts.
             </div>
           )}
+          {connections.length > 0 && (
+            <div className="flex items-center gap-2 px-1 mb-1">
+              <input
+                type="checkbox"
+                checked={selected.size > 0 && selected.size === connections.length}
+                ref={(el) => {
+                  if (el) el.indeterminate = selected.size > 0 && selected.size < connections.length;
+                }}
+                onChange={toggleAll}
+                title="Select all"
+              />
+              <span className="text-[11.5px] text-fg-dim">
+                {selected.size > 0
+                  ? `${selected.size} selected`
+                  : `${connections.length} connection${connections.length === 1 ? '' : 's'}`}
+              </span>
+              {selected.size > 0 && (
+                <PhButton
+                  size="sm"
+                  variant="danger"
+                  icon={<I.trash size={12} />}
+                  onClick={removeSelected}
+                  disabled={busy === 'bulk:del'}
+                >
+                  {busy === 'bulk:del' ? 'Deleting…' : `Delete ${selected.size}`}
+                </PhButton>
+              )}
+            </div>
+          )}
           {connections.map((c) => (
             <div
               key={c.id}
               className="rounded-lg p-4 flex items-center gap-3"
-              style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+              style={{
+                background: selected.has(c.id) ? 'var(--accent-tint)' : 'var(--surface)',
+                border: `.5px solid ${selected.has(c.id) ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+              }}
             >
+              <input
+                type="checkbox"
+                checked={selected.has(c.id)}
+                onChange={() => toggleOne(c.id)}
+              />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[14px] font-semibold text-fg-strong truncate">
@@ -231,7 +373,16 @@ export function ProvidersPanel() {
                 <div className="text-[11.5px] text-fg-dim mt-1 ph-mono truncate">
                   {c.baseUrl} · {c.defaultModel || '(no default model)'}{' '}
                   {c.hasKey && `· key ${c.apiKeyTail}`}
+                  {c.lastUsedAt && ` · used ${relativeTime(c.lastUsedAt)}`}
                 </div>
+                {c.notes && (
+                  <div
+                    className="text-[11.5px] text-fg-mute mt-1"
+                    style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    {c.notes}
+                  </div>
+                )}
               </div>
               <PhButton
                 size="sm"
@@ -266,18 +417,40 @@ export function ProvidersPanel() {
               </PhButton>
             </div>
           ))}
-          <PhButton
-            variant="primary"
-            size="md"
-            icon={<I.plus size={14} />}
-            onClick={() => {
-              setDraft(emptyDraft());
-              setKeyVisible(false);
-              setFeedback(null);
-            }}
-          >
-            Add connection
-          </PhButton>
+          <div className="flex items-center gap-2">
+            <PhButton
+              variant="primary"
+              size="md"
+              icon={<I.plus size={14} />}
+              onClick={() => {
+                setDraft(emptyDraft());
+                setKeyVisible(false);
+                setFeedback(null);
+              }}
+            >
+              Add connection
+            </PhButton>
+            <span className="flex-1" />
+            <PhButton
+              variant="ghost"
+              size="md"
+              icon={<I.upload size={14} />}
+              onClick={importConnections}
+              title="Import a connections JSON file (API keys not included)"
+            >
+              Import
+            </PhButton>
+            <PhButton
+              variant="ghost"
+              size="md"
+              icon={<I.download size={14} />}
+              onClick={exportConnections}
+              disabled={connections.length === 0}
+              title="Download a JSON file of all connections (API keys excluded)"
+            >
+              Export
+            </PhButton>
+          </div>
         </div>
       )}
 
@@ -352,6 +525,11 @@ export function ProvidersPanel() {
                 onChange={(v) => setDraft({ ...draft, baseUrl: v })}
                 placeholder="https://api.openai.com/v1"
               />
+              {draft.baseUrl.trim() && !isValidBaseUrl(draft.baseUrl) && (
+                <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
+                  Must start with http:// or https://
+                </span>
+              )}
             </Field>
           </div>
 
@@ -379,6 +557,14 @@ export function ProvidersPanel() {
                 {keyVisible ? <I.eyeOff size={14} /> : <I.eye size={14} />}
               </button>
             </div>
+            {(() => {
+              const warn = keyFormatHint(draft);
+              return warn ? (
+                <span className="text-[11px] mt-1" style={{ color: 'var(--warn)' }}>
+                  {warn}
+                </span>
+              ) : null;
+            })()}
           </Field>
 
           <Field label="Default model">
@@ -434,6 +620,49 @@ export function ProvidersPanel() {
             </div>
           </Field>
 
+          <Field label='Custom headers (JSON)'>
+            <textarea
+              value={draft.extraHeaders}
+              onChange={(e) => setDraft({ ...draft, extraHeaders: e.target.value })}
+              rows={3}
+              placeholder='{ "HTTP-Referer": "https://vibeprompter.app", "X-Title": "VibePrompter" }'
+              className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
+              style={{
+                background: 'var(--bg-2)',
+                border: '.5px solid var(--border-strong)',
+                color: 'var(--fg)',
+                fontFamily: 'var(--mono)',
+                minHeight: 64,
+              }}
+            />
+            <span className="text-[11px] text-fg-dim mt-1">
+              Sent with every request to this connection. Use for OpenRouter
+              attribution, corporate gateway tokens, or vendor-specific opt-ins.
+            </span>
+            {draft.extraHeaders.trim() && !isValidJsonObject(draft.extraHeaders) && (
+              <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
+                Must be a JSON object with string values.
+              </span>
+            )}
+          </Field>
+
+          <Field label="Notes (optional)">
+            <textarea
+              value={draft.notes}
+              onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+              rows={2}
+              placeholder="Rate limit reminders, account ownership, anything you'd want to see again."
+              className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
+              style={{
+                background: 'var(--bg-2)',
+                border: '.5px solid var(--border-strong)',
+                color: 'var(--fg)',
+                fontFamily: 'var(--sans)',
+                minHeight: 50,
+              }}
+            />
+          </Field>
+
           <label className="flex items-center gap-2 text-[12.5px] text-fg cursor-pointer">
             <input
               type="checkbox"
@@ -453,7 +682,12 @@ export function ProvidersPanel() {
               size="md"
               icon={<I.check size={14} />}
               onClick={save}
-              disabled={busy === 'save'}
+              disabled={
+                busy === 'save' ||
+                !draft.label.trim() ||
+                !isValidBaseUrl(draft.baseUrl) ||
+                (draft.extraHeaders.trim() !== '' && !isValidJsonObject(draft.extraHeaders))
+              }
             >
               {busy === 'save' ? 'Saving…' : draft.id ? 'Save' : 'Create connection'}
             </PhButton>
@@ -475,6 +709,72 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+/** Warn (but never block) on obvious key/vendor mismatches. Pattern checks
+    are heuristic — Ollama needs no key, OpenAI keys start with `sk-`,
+    Anthropic with `sk-ant-`, Groq with `gsk_`, OpenRouter with `sk-or-`,
+    Gemini AI Studio keys start with `AIza`. Heuristics are derived from
+    the URL since `kind` only tells us protocol. */
+function keyFormatHint(draft: { baseUrl: string; apiKey: string; kind: string }): string | null {
+  const k = draft.apiKey.trim();
+  if (!k) return null;
+  const url = draft.baseUrl.toLowerCase();
+
+  if (url.includes('api.openai.com') && !k.startsWith('sk-')) {
+    return 'OpenAI keys usually start with "sk-". Double-check you pasted the right one.';
+  }
+  if (url.includes('api.anthropic.com') && !k.startsWith('sk-ant-')) {
+    return 'Anthropic keys usually start with "sk-ant-".';
+  }
+  if (url.includes('groq.com') && !k.startsWith('gsk_')) {
+    return 'Groq keys usually start with "gsk_".';
+  }
+  if (url.includes('openrouter.ai') && !k.startsWith('sk-or-')) {
+    return 'OpenRouter keys usually start with "sk-or-".';
+  }
+  if (url.includes('generativelanguage.googleapis.com') && !k.startsWith('AIza')) {
+    return 'Gemini AI Studio keys usually start with "AIza".';
+  }
+  if (url.includes('localhost') && k.length > 0) {
+    return 'Local servers (Ollama / LM Studio) typically need no key.';
+  }
+  return null;
+}
+
+function relativeTime(rfc3339: string): string {
+  if (!rfc3339) return '';
+  const then = Date.parse(rfc3339);
+  if (Number.isNaN(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.round(hr / 24)}d ago`;
+}
+
+function isValidBaseUrl(s: string): boolean {
+  const trimmed = s.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return false;
+  if (/\s/.test(trimmed)) return false;
+  try {
+    new URL(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidJsonObject(s: string): boolean {
+  try {
+    const v = JSON.parse(s);
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+    return Object.values(v).every((x) => typeof x === 'string');
+  } catch {
+    return false;
+  }
 }
 
 function errorMsg(e: unknown): string {

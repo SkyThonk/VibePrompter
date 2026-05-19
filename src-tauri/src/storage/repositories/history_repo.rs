@@ -17,10 +17,14 @@ impl HistoryRepo {
 
     /// List history newest-first, paginated.
     pub async fn list(&self, query: &HistoryQuery) -> AppResult<Vec<HistoryItem>> {
+        // Favorites sort to the top of each page first, then by recency.
+        // Within favorites or non-favorites, newest-first.
         let items: Vec<HistoryItem> = sqlx::query_as(
             "SELECT id, mode_name, icon_name, provider_label, source_text, output_text,
-                    latency_ms, favorite, created_at
-             FROM history ORDER BY created_at DESC, id DESC LIMIT ?1 OFFSET ?2",
+                    latency_ms, favorite, created_at, input_tokens, output_tokens
+             FROM history
+             ORDER BY favorite DESC, created_at DESC, id DESC
+             LIMIT ?1 OFFSET ?2",
         )
         .bind(query.limit)
         .bind(query.offset)
@@ -35,8 +39,9 @@ impl HistoryRepo {
         let now = chrono::Utc::now().to_rfc3339();
         let id = sqlx::query(
             "INSERT INTO history
-               (mode_name, icon_name, provider_label, source_text, output_text, latency_ms, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+               (mode_name, icon_name, provider_label, source_text, output_text, latency_ms,
+                created_at, input_tokens, output_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(&item.mode_name)
         .bind(&item.icon_name)
@@ -45,10 +50,28 @@ impl HistoryRepo {
         .bind(&item.output_text)
         .bind(item.latency_ms)
         .bind(now)
+        .bind(item.input_tokens)
+        .bind(item.output_tokens)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
         Ok(id)
+    }
+
+    pub async fn count(&self) -> AppResult<i64> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM history")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
+    pub async fn set_favorite(&self, id: i64, favorite: bool) -> AppResult<()> {
+        sqlx::query("UPDATE history SET favorite = ?1 WHERE id = ?2")
+            .bind(favorite)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Delete all history rows.
@@ -84,6 +107,8 @@ mod tests {
             source_text: "in".into(),
             output_text: "out".into(),
             latency_ms: 1200,
+            input_tokens: 0,
+            output_tokens: 0,
         }
     }
 

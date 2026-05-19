@@ -84,8 +84,49 @@ fn dispatch(app: &AppHandle, action: &str) {
             }
         }
         "open_palette" => crate::tray::toggle_main_window(app),
+        // Rewrite / Grammar / Summarize all drive the same recipe: grab the
+        // user's current text *selection* (not just clipboard) via a
+        // synthesized Ctrl+C, open the refine overlay near the cursor,
+        // stream the active mode's completion, and let the user accept the
+        // replacement — paste-back is gated behind the Accept button so
+        // we never silently overwrite their selection.
+        "rewrite_selection" | "fix_grammar" | "summarize" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::overlay::begin(app.clone()).await {
+                    let msg = e.to_string();
+                    tracing::warn!("refine begin failed: {msg}");
+                    // Specific recovery path for the most common failure
+                    // mode: no connection / no API key. The user can't
+                    // act on a tiny HUD — pop the main window on the
+                    // providers panel so the fix is right there.
+                    let needs_setup = msg.contains("no default connection")
+                        || msg.contains("no API key")
+                        || msg.contains("has no key");
+                    if needs_setup {
+                        crate::tray::show_main_window(&app);
+                        let _ = tauri::Emitter::emit(&app, "navigate", "/settings/providers");
+                    }
+                    show_error_hud(&app, &msg);
+                }
+            });
+        }
         other => {
             tracing::debug!("shortcut action '{other}' has no backend yet");
         }
     }
+}
+
+fn show_error_hud(app: &AppHandle, msg: &str) {
+    // Surface a single-line summary; the full error is in the logs.
+    let preview = msg.chars().take(80).collect::<String>();
+    let _ = crate::commands::overlay::show_mode_hud_internal(
+        app.clone(),
+        crate::commands::overlay::ModeHudArgs {
+            mode_id: "error".into(),
+            mode_name: preview,
+            icon_name: Some("info".into()),
+            kicker: Some("Prompt failed".into()),
+        },
+    );
 }

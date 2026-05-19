@@ -3,8 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Every field here is wired end-to-end somewhere in the backend or UI.
+/// Don't add a field without also adding the behavior — the whole point of
+/// the recent cleanup was to make this struct *truthful*.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
+    // Window / OS integration
     #[serde(default = "yes")]
     pub boot_start: bool,
     #[serde(default = "yes")]
@@ -12,33 +16,35 @@ pub struct Settings {
     #[serde(default = "no")]
     pub quit_on_close: bool,
     #[serde(default = "yes")]
-    pub auto_paste: bool,
-    #[serde(default = "yes")]
     pub notifications: bool,
+
+    // AI runtime
     #[serde(default = "yes")]
     pub stream_response: bool,
-    #[serde(default = "no")]
-    pub clipboard_fallback: bool,
-    #[serde(default = "no")]
-    pub low_memory_mode: bool,
     #[serde(default = "default_timeout")]
     pub response_timeout: u32,
     #[serde(default = "default_concurrent")]
     pub concurrent_requests: u32,
+    #[serde(default)]
+    pub proxy_url: String,
+
+    // Appearance
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default = "default_accent")]
     pub accent: String,
     #[serde(default = "default_density")]
     pub density: String,
+
+    // Data
     #[serde(default = "default_retention")]
     pub history_retention: String,
+
+    // Developer
     #[serde(default = "no")]
     pub dev_tools: bool,
     #[serde(default = "no")]
     pub log_raw_responses: bool,
-    #[serde(default)]
-    pub proxy_url: String,
 }
 
 fn yes() -> bool { true }

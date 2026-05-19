@@ -3,6 +3,7 @@ import { AppProviders } from './providers';
 import { AppRouter } from './router';
 import { BackendThemeBridge } from './BackendThemeBridge';
 import { ModeHud } from '@features/overlay-hud';
+import { RefineOverlay } from '@features/refine-overlay';
 
 /**
  * Read the current Tauri window label. In multi-window Tauri apps every
@@ -30,6 +31,9 @@ const WINDOW_LABEL = readWindowLabel();
 export function App() {
   if (WINDOW_LABEL === 'mode-hud') {
     return <ModeHud />;
+  }
+  if (WINDOW_LABEL === 'refine-overlay') {
+    return <RefineOverlay />;
   }
   return (
     <AppProviders>

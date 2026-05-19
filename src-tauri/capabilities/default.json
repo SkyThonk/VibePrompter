@@ -4,13 +4,17 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "mode-hud"
+    "mode-hud",
+    "refine-overlay"
   ],
   "permissions": [
     "core:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
-    "notification:default"
+    "notification:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "opener:default"
   ]
 }

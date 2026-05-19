@@ -4,6 +4,7 @@ import { useIsMutating } from '@tanstack/react-query';
 import { I, NavItem, PhInput, PhWindow, type IconName } from '@shared/ui';
 import { useTabsQuery } from '../application/settings.query';
 import type { SettingsTabId } from '../domain';
+import { searchSettings } from './settingsIndex';
 
 export function SettingsWindow() {
   const navigate = useNavigate();
@@ -22,6 +23,10 @@ export function SettingsWindow() {
     return tabs.filter((t) => t.label.toLowerCase().includes(q) || t.id.includes(q));
   }, [tabs, search]);
 
+  // Content matches — searches deeper than just tab labels so users can
+  // find "timeout" or "proxy" and get pointed straight to Advanced.
+  const contentHits = useMemo(() => searchSettings(search), [search]);
+
   // Live save-state indicator. Any in-flight mutation in the app shows "Saving…";
   // the Settings panels are the primary mutators (useSaveSettingsMutation).
   const isSaving = useIsMutating() > 0;
@@ -32,7 +37,7 @@ export function SettingsWindow() {
       style={{ background: 'var(--bg)' }}
     >
       <div style={{ width: 1040, height: 760, maxWidth: '100%' }}>
-        <PhWindow title="PromptHelper · Settings" icon={<span className="ph-mark sm" />}>
+        <PhWindow title="VibePrompter · Settings" icon={<span className="ph-mark sm" />}>
           <div className="flex flex-1 min-h-0 bg-bg" style={{ height: 'calc(100% - 36px)' }}>
             <aside
               className="w-[220px] flex-shrink-0 p-2.5 flex flex-col gap-2.5"
@@ -55,7 +60,7 @@ export function SettingsWindow() {
                 />
               </div>
               <nav className="flex flex-col gap-px" aria-label="Settings sections">
-                {filteredTabs.length === 0 ? (
+                {filteredTabs.length === 0 && contentHits.length === 0 ? (
                   <div className="px-3 py-2 text-[11.5px] text-fg-mute">No matches</div>
                 ) : (
                   filteredTabs.map((n) => {
@@ -72,10 +77,45 @@ export function SettingsWindow() {
                   })
                 )}
               </nav>
+              {search.trim() && contentHits.length > 0 && (
+                <div className="px-2 mt-1 flex flex-col gap-1">
+                  <div className="text-[10.5px] uppercase tracking-[0.10em] text-fg-dim font-semibold px-1 mb-0.5">
+                    Inside settings
+                  </div>
+                  {contentHits.map((h) => (
+                    <button
+                      key={`${h.tab}:${h.label}`}
+                      type="button"
+                      onClick={() => navigate(`/settings/${h.tab}`)}
+                      className="text-left text-[11.5px] px-2 py-1.5 rounded transition-colors"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--fg-mute)',
+                        cursor: 'pointer',
+                      }}
+                      title={`Open ${h.tab}`}
+                    >
+                      <span style={{ color: 'var(--fg)' }}>{h.label}</span>
+                      <span className="ph-mono text-[10px] text-fg-dim ml-1">
+                        · {h.tab}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="mt-auto px-2.5 py-2 text-[11px] text-fg-dim flex items-center gap-2">
                 <SaveIndicator saving={isSaving} />
                 <span className="flex-1" />
-                <span className="ph-mono">v1.2.0</span>
+                <button
+                  type="button"
+                  onClick={() => navigate('/settings/about')}
+                  className="ph-mono text-[11px]"
+                  style={{ background: 'none', border: 'none', color: 'var(--fg-dim)', cursor: 'pointer' }}
+                  title="Open About panel"
+                >
+                  About →
+                </button>
               </div>
             </aside>
             <main

@@ -24,7 +24,7 @@ pub struct TrayMode {
 }
 
 pub struct TrayState {
-    pub modes: Vec<TrayMode>,
+    pub modes: Mutex<Vec<TrayMode>>,
     cursor: Mutex<usize>,
 }
 
@@ -36,26 +36,54 @@ impl TrayState {
     fn new_with_cursor(modes: Vec<TrayMode>, start: usize) -> Self {
         debug_assert!(!modes.is_empty(), "TrayState requires at least one mode");
         let cursor = if modes.is_empty() { 0 } else { start % modes.len() };
-        Self { modes, cursor: Mutex::new(cursor) }
+        Self {
+            modes: Mutex::new(modes),
+            cursor: Mutex::new(cursor),
+        }
     }
 
     pub fn current(&self) -> TrayMode {
-        let i = *self.cursor.lock().unwrap();
-        self.modes[i].clone()
+        let modes = self.modes.lock().unwrap();
+        let i = (*self.cursor.lock().unwrap()).min(modes.len().saturating_sub(1));
+        modes[i].clone()
     }
 
     pub fn advance(&self) -> TrayMode {
+        let modes = self.modes.lock().unwrap();
         let mut g = self.cursor.lock().unwrap();
-        *g = (*g + 1) % self.modes.len();
-        self.modes[*g].clone()
+        *g = (*g + 1) % modes.len();
+        modes[*g].clone()
     }
 
     /// Jump the cursor to a specific mode by id; returns the new active mode
     /// or `None` if the id isn't in the catalog.
     pub fn set_by_id(&self, id: &str) -> Option<TrayMode> {
-        let pos = self.modes.iter().position(|m| m.id == id)?;
+        let modes = self.modes.lock().unwrap();
+        let pos = modes.iter().position(|m| m.id == id)?;
         *self.cursor.lock().unwrap() = pos;
-        Some(self.modes[pos].clone())
+        Some(modes[pos].clone())
+    }
+
+    /// Snapshot of the mode list (for iteration without holding the lock).
+    pub fn snapshot(&self) -> Vec<TrayMode> {
+        self.modes.lock().unwrap().clone()
+    }
+
+    /// Replace the mode list. Preserves the active mode id if still present;
+    /// otherwise resets to the first mode. Returns the new active mode so
+    /// the caller can re-emit `mode_changed` if the active mode shifted.
+    pub fn replace_modes(&self, new_modes: Vec<TrayMode>) -> Option<TrayMode> {
+        if new_modes.is_empty() {
+            return None;
+        }
+        let prior_id = self.current().id;
+        let new_pos = new_modes
+            .iter()
+            .position(|m| m.id == prior_id)
+            .unwrap_or(0);
+        *self.modes.lock().unwrap() = new_modes.clone();
+        *self.cursor.lock().unwrap() = new_pos;
+        Some(new_modes[new_pos].clone())
     }
 }
 
@@ -68,6 +96,10 @@ pub struct TrayAccelerators {
     pub palette: Option<String>,
     pub mode_switch: Option<String>,
 }
+
+/// Stash the current accelerators in managed state so `rebuild_modes` can
+/// re-apply them when reconstructing the menu after a catalog change.
+struct TrayAccelStash(TrayAccelerators);
 
 /// Build the tray icon, attaching a menu hydrated from the catalog. The
 /// `initial_mode_id` lets the caller restore the last-active mode from
@@ -86,6 +118,7 @@ pub fn init(
         .unwrap_or(0);
     let initial = modes[start].clone();
     app.manage(TrayState::new_with_cursor(modes, start));
+    app.manage(TrayAccelStash(accels.clone()));
 
     let show_item = MenuItem::with_id(app, "tray.show", "Show VibePrompter", true, None::<&str>)
         .map_err(|e| AppError::Config(format!("tray menu show: {e}")))?;
@@ -109,7 +142,7 @@ pub fn init(
     // Build a "Set mode →" submenu listing every catalog mode so the user can
     // pick directly instead of cycling. Each item carries an id of the form
     // `tray.mode:<id>` which the menu-event handler parses back.
-    let modes_snapshot = app.state::<TrayState>().modes.clone();
+    let modes_snapshot = app.state::<TrayState>().snapshot();
     let mut mode_items: Vec<MenuItem<Wry>> = Vec::with_capacity(modes_snapshot.len());
     for m in &modes_snapshot {
         let label = if m.id == initial.id {
@@ -183,6 +216,124 @@ pub fn init(
     Ok(())
 }
 
+/// Rebuild the tray menu after the mode catalog changed (new/edited/
+/// deleted mode). Pulls fresh modes from the catalog, swaps the menu on
+/// the existing tray icon, and re-manages the menu-item handles. Active
+/// mode id is preserved when still present.
+pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
+    let state = app
+        .try_state::<crate::app::state::AppState>()
+        .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
+    let modes = state.catalog.list_modes().await?;
+    let tray_modes: Vec<TrayMode> = modes
+        .into_iter()
+        .map(|m| TrayMode { id: m.id, name: m.name, icon_name: Some(m.icon_name) })
+        .collect();
+    if tray_modes.is_empty() {
+        tracing::warn!("rebuild_modes: catalog empty, skipping");
+        return Ok(());
+    }
+
+    let tray_state = app
+        .try_state::<TrayState>()
+        .ok_or_else(|| AppError::Config("TrayState not initialized".into()))?;
+    let active = tray_state
+        .replace_modes(tray_modes.clone())
+        .ok_or_else(|| AppError::Config("replace_modes returned None".into()))?;
+
+    let accels = app
+        .try_state::<TrayAccelStash>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+
+    // Build the new menu pieces. Same layout as `init` — keep them in sync.
+    let show_item =
+        MenuItem::with_id(app, "tray.show", "Show VibePrompter", true, None::<&str>)
+            .map_err(|e| AppError::Config(format!("rebuild show: {e}")))?;
+    let palette_item = MenuItem::with_id(
+        app,
+        "tray.palette",
+        "Open command palette",
+        true,
+        accels.palette.as_deref(),
+    )
+    .map_err(|e| AppError::Config(format!("rebuild palette: {e}")))?;
+    let cycle_item = MenuItem::with_id(
+        app,
+        "tray.cycle",
+        &format!("Switch mode — currently {}", active.name),
+        true,
+        accels.mode_switch.as_deref(),
+    )
+    .map_err(|e| AppError::Config(format!("rebuild cycle: {e}")))?;
+
+    let mut mode_items: Vec<MenuItem<Wry>> = Vec::with_capacity(tray_modes.len());
+    for m in &tray_modes {
+        let label = if m.id == active.id {
+            format!("● {}", m.name)
+        } else {
+            format!("   {}", m.name)
+        };
+        let item =
+            MenuItem::with_id(app, format!("tray.mode:{}", m.id), &label, true, None::<&str>)
+                .map_err(|e| AppError::Config(format!("rebuild mode item: {e}")))?;
+        mode_items.push(item);
+    }
+    let mode_dyn_refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = mode_items
+        .iter()
+        .map(|m| m as &dyn tauri::menu::IsMenuItem<Wry>)
+        .collect();
+    let modes_submenu = Submenu::with_id_and_items(
+        app,
+        "tray.modes_submenu",
+        "Set mode",
+        true,
+        &mode_dyn_refs,
+    )
+    .map_err(|e| AppError::Config(format!("rebuild modes submenu: {e}")))?;
+
+    let sep = PredefinedMenuItem::separator(app)
+        .map_err(|e| AppError::Config(format!("rebuild sep: {e}")))?;
+    let settings_item =
+        MenuItem::with_id(app, "tray.settings", "Settings…", true, None::<&str>)
+            .map_err(|e| AppError::Config(format!("rebuild settings: {e}")))?;
+    let sep2 = PredefinedMenuItem::separator(app)
+        .map_err(|e| AppError::Config(format!("rebuild sep2: {e}")))?;
+    let quit_item = MenuItem::with_id(app, "tray.quit", "Quit", true, None::<&str>)
+        .map_err(|e| AppError::Config(format!("rebuild quit: {e}")))?;
+
+    let menu: Menu<Wry> = Menu::with_items(
+        app,
+        &[
+            &show_item,
+            &palette_item,
+            &cycle_item,
+            &modes_submenu,
+            &sep,
+            &settings_item,
+            &sep2,
+            &quit_item,
+        ],
+    )
+    .map_err(|e| AppError::Config(format!("rebuild menu: {e}")))?;
+
+    // Re-manage the dynamic handles so cycle/click still finds them.
+    app.manage(TrayCycleItem(cycle_item));
+    app.manage(TrayModeItems(mode_items));
+
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_menu(Some(menu));
+        let _ = tray.set_tooltip(Some(format!("VibePrompter — mode: {}", active.name)));
+    }
+
+    // The active mode might have shifted (e.g. user deleted the active mode).
+    let _ = app.emit(
+        "mode_changed",
+        serde_json::json!({ "id": active.id, "name": active.name, "iconName": active.icon_name }),
+    );
+    Ok(())
+}
+
 /// Wrapper so we can stash the dynamic cycle menu item in Tauri-managed state
 /// without exposing the concrete `MenuItem<Wry>` type at the call sites.
 struct TrayCycleItem(MenuItem<Wry>);
@@ -222,7 +373,7 @@ fn apply_active_mode(app: &AppHandle, next: TrayMode) -> AppResult<()> {
         app.try_state::<TrayModeItems>(),
         app.try_state::<TrayState>(),
     ) {
-        for (i, m) in state.modes.iter().enumerate() {
+        for (i, m) in state.snapshot().iter().enumerate() {
             if let Some(item) = items.0.get(i) {
                 let label = if m.id == next.id {
                     format!("● {}", m.name)

@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod connections;
+pub mod diagnostics;
 pub mod history;
 pub mod overlay;
 pub mod settings;
@@ -9,6 +10,7 @@ pub mod shortcuts;
 
 pub use catalog::*;
 pub use connections::*;
+pub use diagnostics::*;
 pub use history::*;
 pub use overlay::*;
 pub use settings::*;

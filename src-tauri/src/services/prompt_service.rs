@@ -6,7 +6,7 @@
 //! → completion → history. Commands stay thin.
 
 use crate::models::{ChatMessage, CompletionParams, CompletionResult, NewHistoryItem};
-use crate::services::{CatalogService, ConnectionService, HistoryService};
+use crate::services::{AnalyticsService, CatalogService, ConnectionService, HistoryService};
 use crate::storage::repositories::ConnectionRow;
 use crate::utils::{AppError, AppResult};
 
@@ -15,6 +15,7 @@ pub struct PromptService {
     catalog: CatalogService,
     connections: ConnectionService,
     history: HistoryService,
+    analytics: Option<AnalyticsService>,
 }
 
 impl PromptService {
@@ -23,7 +24,12 @@ impl PromptService {
         connections: ConnectionService,
         history: HistoryService,
     ) -> Self {
-        Self { catalog, connections, history }
+        Self { catalog, connections, history, analytics: None }
+    }
+
+    pub fn with_analytics(mut self, a: AnalyticsService) -> Self {
+        self.analytics = Some(a);
+        self
     }
 
     /// Execute a prompt: combine the mode's system prompt with `input`, run
@@ -57,7 +63,15 @@ impl PromptService {
             system: Some(mode.system_prompt.clone()),
         };
 
-        let result = match connection_id {
+        // Precedence: explicit `connection_id` arg → mode's `provider_override`
+        // → workspace default. So a mode can pin itself to a specific
+        // connection ("Code Review always uses Claude") while one-off calls
+        // can still target a different connection from the UI.
+        let resolved_conn_id = connection_id
+            .map(|s| s.to_string())
+            .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+
+        let result = match resolved_conn_id.as_deref() {
             Some(id) => self.connections.complete(id, messages, params).await?,
             None => self.connections.complete_default(messages, params).await?,
         };
@@ -67,22 +81,37 @@ impl PromptService {
         // diagnostics rather than propagated.
         let provider_label = describe_connection(
             self.connections.list().await.unwrap_or_default(),
-            connection_id,
+            resolved_conn_id.as_deref(),
             &result.model,
         );
         if let Err(e) = self
             .history
             .record(NewHistoryItem {
-                mode_name: mode.name,
-                icon_name: mode.icon_name,
+                mode_name: mode.name.clone(),
+                icon_name: mode.icon_name.clone(),
                 provider_label,
                 source_text: input.to_string(),
                 output_text: result.text.clone(),
                 latency_ms: result.latency_ms as i64,
+                input_tokens: result.usage.input_tokens as i64,
+                output_tokens: result.usage.output_tokens as i64,
             })
             .await
         {
             tracing::warn!("history record failed (non-fatal): {e}");
+        }
+
+        if let Some(a) = &self.analytics {
+            a.record(
+                "prompt_run",
+                serde_json::json!({
+                    "mode": mode.id,
+                    "model": result.model,
+                    "latencyMs": result.latency_ms,
+                    "inputTokens": result.usage.input_tokens,
+                    "outputTokens": result.usage.output_tokens,
+                }),
+            );
         }
 
         Ok(result)
@@ -137,6 +166,10 @@ pub async fn run_with_row(
             max_tokens: Some(mode.max_tokens as u32),
             system: Some(mode.system_prompt.clone()),
         },
+        // `run_with_row` is a dead-code escape hatch — use default HTTP
+        // config; real callers go through `ConnectionService` which threads
+        // settings-derived config through.
+        &crate::providers::HttpConfig::default(),
     )
     .await?;
 
@@ -148,6 +181,8 @@ pub async fn run_with_row(
             source_text: input.to_string(),
             output_text: result.text.clone(),
             latency_ms: result.latency_ms as i64,
+            input_tokens: result.usage.input_tokens as i64,
+            output_tokens: result.usage.output_tokens as i64,
         })
         .await;
     Ok(result)

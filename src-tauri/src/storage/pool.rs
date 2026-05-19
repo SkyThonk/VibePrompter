@@ -34,6 +34,66 @@ pub async fn run_migrations(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
+/// Snapshot the DB file alongside itself (`<db>.bak`) before any migration
+/// run that would actually apply something. Cheap insurance — if a future
+/// migration corrupts data the user has a one-step rollback.
+///
+/// Skipped if (a) no DB file exists yet (fresh install), (b) every embedded
+/// migration is already applied (nothing to back up), or (c) the previous
+/// backup is newer than the current DB (back-up already taken this session).
+pub async fn backup_before_migrations(pool: &SqlitePool, db_path: &Path) -> AppResult<()> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+
+    let applied: Vec<(i64,)> = sqlx::query_as("SELECT version FROM _sqlx_migrations")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let applied_set: std::collections::HashSet<i64> =
+        applied.into_iter().map(|(v,)| v).collect();
+    let pending = MIGRATOR
+        .migrations
+        .iter()
+        .any(|m| !applied_set.contains(&(m.version)));
+    if !pending {
+        return Ok(());
+    }
+
+    let backup_path = db_path.with_extension("db.bak");
+    let db_mtime = std::fs::metadata(db_path)
+        .and_then(|m| m.modified())
+        .ok();
+    let backup_mtime = std::fs::metadata(&backup_path)
+        .and_then(|m| m.modified())
+        .ok();
+    if let (Some(db_t), Some(bak_t)) = (db_mtime, backup_mtime) {
+        if bak_t > db_t {
+            tracing::debug!("skip db backup — existing one is newer");
+            return Ok(());
+        }
+    }
+
+    match std::fs::copy(db_path, &backup_path) {
+        Ok(n) => {
+            tracing::info!(
+                "db backup written: {} → {} ({} bytes)",
+                db_path.display(),
+                backup_path.display(),
+                n
+            );
+        }
+        Err(e) => {
+            // Backup failure should NOT block the migration — the user may
+            // be on a read-only volume or low on disk. Loud warn, then
+            // proceed. Migrations themselves run in transactions so a
+            // failed migration won't half-apply.
+            tracing::warn!("db backup failed (proceeding anyway): {e}");
+        }
+    }
+    Ok(())
+}
+
 /// Create an in-memory pool with migrations applied — for tests only.
 #[cfg(test)]
 pub async fn test_pool() -> SqlitePool {
@@ -88,7 +148,9 @@ mod tests {
         assert_eq!(providers, 4);
         assert_eq!(modes, 6);
         assert_eq!(shortcuts, 5);
-        assert_eq!(settings, 17);
+        // Three keys (auto_paste, clipboard_fallback, low_memory_mode) were
+        // dropped in migration 0005 — they no longer back any behavior.
+        assert_eq!(settings, 14);
     }
 
     #[tokio::test]

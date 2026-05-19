@@ -1,5 +1,6 @@
 //! Repositories — each owns the SQL for one table.
 
+pub mod analytics_repo;
 pub mod connection_repo;
 pub mod history_repo;
 pub mod mode_repo;
@@ -7,6 +8,7 @@ pub mod provider_repo;
 pub mod settings_repo;
 pub mod shortcut_repo;
 
+pub use analytics_repo::AnalyticsRepo;
 pub use connection_repo::{ConnectionRepo, ConnectionRow};
 pub use history_repo::HistoryRepo;
 pub use mode_repo::ModeRepo;

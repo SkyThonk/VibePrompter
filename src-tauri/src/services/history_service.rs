@@ -25,6 +25,14 @@ impl HistoryService {
         self.repo.clear().await
     }
 
+    pub async fn count(&self) -> AppResult<i64> {
+        self.repo.count().await
+    }
+
+    pub async fn set_favorite(&self, id: i64, favorite: bool) -> AppResult<()> {
+        self.repo.set_favorite(id, favorite).await
+    }
+
     /// Record a completed transformation. Used by sub-project 2.
     #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {
@@ -80,6 +88,8 @@ mod tests {
                 source_text: "hi".into(),
                 output_text: "Hello".into(),
                 latency_ms: 900,
+            input_tokens: 0,
+            output_tokens: 0,
             })
             .await
             .unwrap();
@@ -120,6 +130,8 @@ mod tests {
             source_text: "hi".into(),
             output_text: "Hello".into(),
             latency_ms: 900,
+            input_tokens: 0,
+            output_tokens: 0,
         }
     }
 
@@ -134,6 +146,8 @@ mod tests {
                 source_text: "hi".into(),
                 output_text: "Hello".into(),
                 latency_ms: 900,
+            input_tokens: 0,
+            output_tokens: 0,
             })
             .await
             .unwrap();

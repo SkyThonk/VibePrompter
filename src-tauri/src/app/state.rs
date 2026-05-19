@@ -4,14 +4,12 @@
 
 use crate::config::Config;
 use crate::services::{
-    CatalogService, ConnectionService, HistoryService, PromptService, SettingsService,
-    ShortcutService,
+    AnalyticsService, CatalogService, ConnectionService, HistoryService, PromptService,
+    SettingsService, ShortcutService,
 };
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Stored for sub-projects 2/3 (path resolution etc.); no Foundation command reads it yet.
-    #[allow(dead_code)]
     pub config: Config,
     pub settings: SettingsService,
     pub history: HistoryService,
@@ -19,4 +17,5 @@ pub struct AppState {
     pub catalog: CatalogService,
     pub connections: ConnectionService,
     pub prompts: PromptService,
+    pub analytics: AnalyticsService,
 }

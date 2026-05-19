@@ -36,7 +36,7 @@ pub async fn mark_first_run_done(state: State<'_, AppState>) -> Result<(), AppEr
 /// doesn't belong on the typed `Settings` aggregate (e.g. `last_route`).
 /// Whitelisted to a small key prefix so a compromised frontend can't write
 /// arbitrary rows into the settings table.
-const KV_ALLOWED_KEYS: &[&str] = &["last_route"];
+const KV_ALLOWED_KEYS: &[&str] = &["last_route", "last_seen_version"];
 
 fn ensure_allowed(key: &str) -> Result<(), AppError> {
     if KV_ALLOWED_KEYS.contains(&key) {
@@ -62,4 +62,42 @@ pub async fn set_kv(
 ) -> Result<(), AppError> {
     ensure_allowed(&key)?;
     state.settings.set_kv(&key, &value).await
+}
+
+/// Export the user's full Settings aggregate as JSON. Wraps it with a schema
+/// tag so the import side can refuse files from other apps.
+#[tauri::command]
+pub async fn export_settings(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, AppError> {
+    let settings = state.settings.get().await?;
+    Ok(serde_json::json!({
+        "schema": "vibeprompter-settings-v1",
+        "exportedAt": chrono::Utc::now().to_rfc3339(),
+        "settings": settings,
+    }))
+}
+
+/// Import a previously-exported Settings payload. Unknown fields are
+/// silently dropped (Settings::default fills the gaps) so a file from a
+/// future version with new fields downgrades gracefully.
+#[tauri::command]
+pub async fn import_settings(
+    state: State<'_, AppState>,
+    payload: serde_json::Value,
+) -> Result<(), AppError> {
+    let schema = payload.get("schema").and_then(|v| v.as_str()).unwrap_or("");
+    if schema != "vibeprompter-settings-v1" {
+        return Err(AppError::Validation(format!(
+            "unrecognized settings schema '{schema}' — expected vibeprompter-settings-v1"
+        )));
+    }
+    let value = payload
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| AppError::Validation("payload missing `settings` object".into()))?;
+    let settings: crate::models::Settings = serde_json::from_value(value).map_err(|e| {
+        AppError::Validation(format!("settings payload doesn't match expected shape: {e}"))
+    })?;
+    state.settings.save(&settings).await
 }

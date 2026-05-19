@@ -116,6 +116,28 @@ pub async fn set_active_mode(app: AppHandle, id: String) -> AppResult<()> {
     crate::tray::set_active_mode_by_id(&app, &id)
 }
 
+/// Begin a refine session on demand from the frontend (debug / dashboard
+/// "Try refine on selection" button). Same code path as the global hotkey.
+#[tauri::command]
+pub async fn refine_begin(app: AppHandle) -> AppResult<()> {
+    crate::overlay::begin(app).await
+}
+
+#[tauri::command]
+pub async fn refine_accept(app: AppHandle, text: String) -> AppResult<()> {
+    crate::overlay::accept(app, text).await
+}
+
+#[tauri::command]
+pub async fn refine_reject(app: AppHandle) -> AppResult<()> {
+    crate::overlay::reject(app)
+}
+
+#[tauri::command]
+pub async fn refine_retry(app: AppHandle) -> AppResult<()> {
+    crate::overlay::retry(app).await
+}
+
 /// Hide the main window to the tray. The window can be re-shown via the
 /// global `Ctrl+Shift+Space` shortcut, the tray icon left-click, or the tray
 /// menu's "Show VibePrompter" item.

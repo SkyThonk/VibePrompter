@@ -51,7 +51,14 @@ pub async fn list_global_shortcuts(
         .into_iter()
         .filter(|i| i.enabled)
         .map(|i| ShortcutBinding {
-            has_backend: matches!(i.action.as_str(), "mode_switch" | "open_palette"),
+            has_backend: matches!(
+                i.action.as_str(),
+                "mode_switch"
+                    | "open_palette"
+                    | "rewrite_selection"
+                    | "fix_grammar"
+                    | "summarize"
+            ),
             id: i.id,
             action: i.action,
             accelerator: i.accelerator,

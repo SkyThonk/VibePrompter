@@ -42,6 +42,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         // Persist window size/position across launches so the user's layout
         // sticks. Skips the `mode-hud` window — that's transparent, sized
         // by config, and re-centered on every show.
@@ -70,13 +72,22 @@ pub fn run() {
             commands::mark_first_run_done,
             commands::get_kv,
             commands::set_kv,
+            commands::export_settings,
+            commands::import_settings,
             commands::get_history,
             commands::clear_history,
+            commands::export_history,
+            commands::count_history,
+            commands::set_history_favorite,
+            commands::export_connections,
+            commands::import_connections,
             commands::list_shortcuts,
             commands::register_shortcut,
             commands::unregister_shortcut,
             commands::list_global_shortcuts,
             commands::list_modes,
+            commands::save_mode,
+            commands::delete_mode,
             commands::list_providers,
             commands::list_connections,
             commands::save_connection,
@@ -87,12 +98,24 @@ pub fn run() {
             commands::complete,
             commands::complete_default,
             commands::run_prompt,
+            commands::run_prompt_stream,
+            commands::cancel_stream,
+            commands::get_in_flight,
+            commands::get_diagnostics,
+            commands::get_recent_logs,
+            commands::run_health_check,
+            commands::get_analytics_summary,
+            commands::open_app_folder,
             commands::show_mode_hud,
             commands::cycle_mode_cmd,
             commands::set_active_mode,
             commands::get_active_mode,
             commands::quit_app,
             commands::hide_main_window,
+            commands::refine_begin,
+            commands::refine_accept,
+            commands::refine_reject,
+            commands::refine_retry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

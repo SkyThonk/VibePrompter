@@ -6,7 +6,7 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { BrowserRouter } from 'react-router-dom';
 import { store, persistor } from '@kernel/application';
 import { ThemeProvider } from '@shared/lib/theme';
-import { LoadingSpinner } from '@shared/ui';
+import { LoadingSpinner, ToastProvider } from '@shared/ui';
 
 // Create a client for TanStack Query
 const queryClient = new QueryClient({
@@ -45,7 +45,7 @@ export function AppProviders({ children }: AppProvidersProps) {
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
             <ThemeProvider defaultTheme="system" storageKey="app-theme">
-              {children}
+              <ToastProvider>{children}</ToastProvider>
             </ThemeProvider>
           </BrowserRouter>
           <ReactQueryDevtools initialIsOpen={false} />

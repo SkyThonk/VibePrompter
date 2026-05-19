@@ -59,7 +59,7 @@ mod tests {
     async fn get_all_returns_seeded_rows() {
         let repo = SettingsRepo::new(test_pool().await);
         let rows = repo.get_all().await.unwrap();
-        assert_eq!(rows.len(), 17);
+        assert_eq!(rows.len(), 14);
         assert!(rows.iter().any(|(k, v)| k == "theme" && v == "\"dark\""));
     }
 
@@ -71,6 +71,6 @@ mod tests {
         let theme = rows.iter().find(|(k, _)| k == "theme").unwrap();
         assert_eq!(theme.1, "\"light\"");
         // Still 17 rows — upsert, not insert.
-        assert_eq!(rows.len(), 17);
+        assert_eq!(rows.len(), 14);
     }
 }

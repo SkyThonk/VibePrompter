@@ -1,4 +1,4 @@
-import { Group, I, PanelHead, SettingRow, Slider, Toggle } from '@shared/ui';
+import { Group, PanelHead } from '@shared/ui';
 import { useAppSettingsQuery, useSaveSettingsMutation } from '../../application/settings.query';
 
 const ACCENTS = [
@@ -28,7 +28,7 @@ export function AppearancePanel() {
     <>
       <PanelHead
         title="Appearance"
-        hint="Customize how PromptHelper looks across the app."
+        hint="Customize how VibePrompter looks across the app."
       />
 
       <Group title="Theme">
@@ -125,32 +125,6 @@ export function AppearancePanel() {
         </div>
       </Group>
 
-      <Group title="Palette window">
-        <SettingRow
-          icon={<I.eye size={14} />}
-          label="Transparency"
-          control={
-            <div style={{ width: 180 }}>
-              <Slider value={0.8} onChange={() => {}} format={(v) => `${Math.round(v * 100)}%`} />
-            </div>
-          }
-        />
-        <SettingRow
-          icon={<I.layers size={14} />}
-          label="Background blur"
-          control={
-            <div style={{ width: 180 }}>
-              <Slider value={0.7} onChange={() => {}} format={(v) => `${Math.round(v * 32)}px`} />
-            </div>
-          }
-        />
-        <SettingRow
-          icon={<I.pin size={14} />}
-          label="Pin to top of screen"
-          hint="Otherwise the palette opens near the cursor."
-          control={<Toggle value={true} onChange={() => {}} />}
-        />
-      </Group>
     </>
   );
 }

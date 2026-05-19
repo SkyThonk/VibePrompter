@@ -43,6 +43,13 @@ pub struct ConnectionInfo {
     pub default_model: String,
     #[serde(rename = "isDefault")]
     pub is_default: bool,
+    /// JSON-encoded `{ "Header": "value", ... }`. Empty string when none.
+    #[serde(rename = "extraHeaders")]
+    pub extra_headers: String,
+    /// RFC3339 of the last successful call, or empty string if never used.
+    #[serde(rename = "lastUsedAt")]
+    pub last_used_at: String,
+    pub notes: String,
 }
 
 /// Write DTO from the frontend. `apiKey` is optional on update — when absent
@@ -61,6 +68,12 @@ pub struct ConnectionInput {
     pub default_model: String,
     #[serde(default)]
     pub is_default: bool,
+    /// JSON-encoded `{ "Header": "value" }`. Empty string allowed; the
+    /// service validates the JSON shape before persisting.
+    #[serde(default)]
+    pub extra_headers: String,
+    #[serde(default)]
+    pub notes: String,
 }
 
 /// A single message in a chat completion request — identical shape for both
@@ -87,10 +100,24 @@ pub struct CompletionParams {
     pub system: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenUsage {
+    #[serde(rename = "inputTokens")]
+    pub input_tokens: u32,
+    #[serde(rename = "outputTokens")]
+    pub output_tokens: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionResult {
     pub text: String,
     pub model: String,
     #[serde(rename = "latencyMs")]
     pub latency_ms: u64,
+    /// Token usage as reported by the vendor. Zero values mean either the
+    /// vendor didn't report it (some OpenAI-compat servers, streaming
+    /// responses without `stream_options.include_usage`) or the response
+    /// was cancelled before usage arrived.
+    #[serde(default)]
+    pub usage: TokenUsage,
 }

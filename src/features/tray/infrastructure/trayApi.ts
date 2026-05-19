@@ -17,12 +17,12 @@ const ITEMS_SECONDARY: TrayMenuItem[] = [
 
 interface BackendSettings {
   boot_start: boolean;
-  clipboard_fallback: boolean;
 }
 
-// Toggles are derived from the real settings aggregate. The 'enabled' and
-// 'shortcuts' toggles have no Foundation backing yet — they default to true
-// until sub-project 3 owns them.
+// NOTE: this whole feature is a design preview from when the tray was a React
+// page (`/tray`). The actual tray is now a native OS tray icon driven by the
+// Rust backend; this file is kept compiling so design artifacts survive but
+// the route is no longer registered. Safe to delete the directory entirely.
 export const trayApi = {
   getToggles: async (): Promise<TrayToggleConfig[]> => {
     const s = await invokeCommand<BackendSettings>('get_settings');
@@ -30,7 +30,6 @@ export const trayApi = {
       { id: 'enabled', label: 'Enable AI', iconName: 'bolt', defaultValue: true },
       { id: 'shortcuts', label: 'Global shortcuts', iconName: 'keyboard', defaultValue: true, kbd: ['Ctrl', '⇧', '␣'] },
       { id: 'boot', label: 'Start on boot', iconName: 'power', defaultValue: s.boot_start },
-      { id: 'clip', label: 'Clipboard monitor', iconName: 'clipboard', defaultValue: s.clipboard_fallback },
     ];
   },
   getPrimaryItems: async (): Promise<TrayMenuItem[]> => ITEMS_PRIMARY,

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { settingsApi } from '../infrastructure/settingsApi';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
+import { useToast } from '@shared/ui';
 
 const k = (...parts: string[]) => ['settings', ...parts];
 
@@ -12,8 +13,16 @@ export const useProvidersQuery = () =>
   useQuery({ queryKey: k('providers'), queryFn: settingsApi.getProviders });
 export const useOllamaModelsQuery = () =>
   useQuery({ queryKey: k('ollama'), queryFn: settingsApi.getOllamaModels });
-export const useHistoryQuery = () =>
-  useQuery({ queryKey: k('history'), queryFn: settingsApi.getHistory });
+/** History list. Accepts pagination so the panel can grow page-by-page
+    instead of forcing a single 100-row pull. */
+export const useHistoryQuery = (limit = 50, offset = 0) =>
+  useQuery({
+    queryKey: k('history', String(limit), String(offset)),
+    queryFn: () =>
+      invokeCommand<import('../domain').HistoryItem[]>('get_history', {
+        query: { limit, offset },
+      }),
+  });
 export const useShortcutsQuery = () =>
   useQuery({ queryKey: k('shortcuts'), queryFn: settingsApi.getShortcuts });
 
@@ -22,11 +31,8 @@ export interface AppSettings {
   boot_start: boolean;
   minimize_to_tray: boolean;
   quit_on_close: boolean;
-  auto_paste: boolean;
   notifications: boolean;
   stream_response: boolean;
-  clipboard_fallback: boolean;
-  low_memory_mode: boolean;
   response_timeout: number;
   concurrent_requests: number;
   theme: string;
@@ -46,9 +52,17 @@ export const useAppSettingsQuery = () =>
 
 export const useSaveSettingsMutation = () => {
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     mutationFn: (settings: AppSettings) =>
       invokeCommand<void>('save_settings', { settings }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: k('app-settings') }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: k('app-settings') });
+      // Short, low-volume confirmation. Every Settings panel toggle goes
+      // through this hook so users get consistent feedback without each
+      // panel having to wire its own success message.
+      toast.ok('Setting saved.');
+    },
+    onError: (err) => toast.err(String(err), 'Could not save setting'),
   });
 };

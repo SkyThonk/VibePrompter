@@ -22,6 +22,10 @@ pub struct HistoryItem {
     pub favorite: bool,
     #[serde(rename = "createdAt")]
     pub created_at: String,
+    #[serde(rename = "inputTokens")]
+    pub input_tokens: i64,
+    #[serde(rename = "outputTokens")]
+    pub output_tokens: i64,
 }
 
 /// Input for inserting a new history record (used by sub-project 2).
@@ -34,6 +38,8 @@ pub struct NewHistoryItem {
     pub source_text: String,
     pub output_text: String,
     pub latency_ms: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

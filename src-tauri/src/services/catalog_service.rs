@@ -22,6 +22,20 @@ impl CatalogService {
         self.modes.list().await
     }
 
+    pub async fn save_mode(&self, mode: PromptMode) -> AppResult<PromptMode> {
+        // New rows go to the end; updates keep their existing slot.
+        let sort_order = match self.modes.get(&mode.id).await {
+            Ok(_) => 0, // ignored by upsert UPDATE branch
+            Err(_) => self.modes.max_sort_order().await? + 1,
+        };
+        self.modes.upsert(&mode, sort_order).await?;
+        self.modes.get(&mode.id).await
+    }
+
+    pub async fn delete_mode(&self, id: &str) -> AppResult<()> {
+        self.modes.delete(id).await
+    }
+
     /// List all providers.
     pub async fn list_providers(&self) -> AppResult<Vec<ProviderInfo>> {
         self.providers.list().await

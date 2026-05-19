@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Suspense, lazy, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { LoadingSpinner } from '@shared/ui';
+import { Changelog, CheatSheet, CommandPalette, LoadingSpinner } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 const HomePage = lazy(() =>
@@ -197,6 +197,9 @@ export function AppRouter() {
       <LastRouteMemory />
       <WindowKeyboardShortcuts />
       <BackendNavigationBridge />
+      <CommandPalette />
+      <CheatSheet />
+      <Changelog />
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/setup" element={<OnboardingPage />} />

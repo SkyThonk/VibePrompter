@@ -8,13 +8,14 @@ use crate::app::state::AppState;
 use crate::config::Config;
 use crate::events::{AppEvent, EventBus};
 use crate::services::{
-    CatalogService, ConnectionService, HistoryService, PromptService, SettingsService,
-    ShortcutService,
+    AnalyticsService, CatalogService, ConnectionService, HistoryService, PromptService,
+    SettingsService, ShortcutService,
 };
 use crate::storage::repositories::{
-    ConnectionRepo, HistoryRepo, ModeRepo, ProviderRepo, SettingsRepo, ShortcutRepo,
+    AnalyticsRepo, ConnectionRepo, HistoryRepo, ModeRepo, ProviderRepo, SettingsRepo,
+    ShortcutRepo,
 };
-use crate::storage::{create_pool, run_migrations};
+use crate::storage::{backup_before_migrations, create_pool, run_migrations};
 use crate::utils::{AppError, AppResult};
 
 /// Build and register all backend state. Runs on the Tauri setup hook.
@@ -29,6 +30,10 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     tracing::info!("app data dir: {}", config.app_data_dir.display());
 
     let pool = create_pool(&config.db_path).await?;
+    // Snapshot the DB before applying anything new — non-fatal on failure.
+    if let Err(e) = backup_before_migrations(&pool, &config.db_path).await {
+        tracing::warn!("backup_before_migrations: {e}");
+    }
     run_migrations(&pool).await?;
     tracing::info!("database ready at {}", config.db_path.display());
 
@@ -38,8 +43,30 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     let history = HistoryService::new(HistoryRepo::new(pool.clone()));
     let shortcuts = ShortcutService::new(ShortcutRepo::new(pool.clone()), events.clone());
     let catalog = CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
-    let connections = ConnectionService::new(ConnectionRepo::new(pool.clone()));
-    let prompts = PromptService::new(catalog.clone(), connections.clone(), history.clone());
+    let secrets: std::sync::Arc<dyn crate::security::SecretStore> =
+        crate::security::init().into();
+    // Concurrent-request limit comes from settings at boot; resizing the
+    // semaphore at runtime would mean draining in-flight requests, so we
+    // keep it boot-time and the UI's "Save & restart" copy reflects that.
+    let max_concurrent = settings
+        .get()
+        .await
+        .map(|s| s.concurrent_requests)
+        .unwrap_or(3);
+    let connections = ConnectionService::new(
+        ConnectionRepo::new(pool.clone()),
+        secrets.clone(),
+        settings.clone(),
+        max_concurrent,
+    );
+    // One-shot migration: move any plaintext keys from older builds into the
+    // OS keyring. Idempotent — rows with empty `api_key` are skipped.
+    if let Err(e) = connections.migrate_keys_to_keyring().await {
+        tracing::warn!("keyring migration failed (non-fatal): {e}");
+    }
+    let analytics = AnalyticsService::new(AnalyticsRepo::new(pool.clone()));
+    let prompts = PromptService::new(catalog.clone(), connections.clone(), history.clone())
+        .with_analytics(analytics.clone());
 
     // Hydrate the tray's mode list from the catalog *before* moving `catalog`
     // into AppState. Falls back to a minimal default if the seed is missing
@@ -101,12 +128,32 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         mode_switch: find_accel("mode_switch"),
     };
 
-    app.manage(AppState { config, settings, history, shortcuts, catalog, connections, prompts });
+    app.manage(AppState {
+        config,
+        settings,
+        history,
+        shortcuts,
+        catalog,
+        connections,
+        prompts,
+        analytics: analytics.clone(),
+    });
+    // Audit-trail event: app finished initializing. Single event_type per
+    // session-start lets us compute uptime/restart cadence from the table.
+    analytics.record(
+        "app_start",
+        serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "platform": std::env::consts::OS,
+        }),
+    );
+    app.manage(crate::app::cancel::CancelRegistry::new());
 
     // OS integrations — tray icon, then global shortcut (which depends on
     // `TrayState` being managed because it calls back into `tray::cycle_mode`).
     let handle = app.handle().clone();
     crate::tray::init(&handle, tray_modes, initial_mode_id.as_deref(), tray_accels)?;
+    crate::overlay::init(&handle);
 
     // Echo the initial active mode so any frontend that mounted before the
     // tray finished initializing (race on cold start) still receives state
@@ -130,6 +177,18 @@ pub async fn initialize(app: &App) -> AppResult<()> {
         tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::shortcuts::init(&h).await {
                 tracing::warn!("shortcut re-registration failed: {e}");
+            }
+        });
+    });
+
+    // Rebuild the tray menu whenever the mode catalog changes so a new mode
+    // shows up in the "Set mode" submenu immediately.
+    let handle_for_modes = handle.clone();
+    handle.listen("modes_changed", move |_event| {
+        let h = handle_for_modes.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::tray::rebuild_modes(&h).await {
+                tracing::warn!("tray rebuild_modes failed: {e}");
             }
         });
     });

@@ -23,7 +23,7 @@ export function GeneralPanel() {
         <SettingRow
           icon={<I.list size={14} />}
           label="Minimize to tray on close"
-          hint="Keep PromptHelper running in the background when you close the window."
+          hint="Keep VibePrompter running in the background when you close the window."
           control={<Toggle value={settings.minimize_to_tray} onChange={(v) => set('minimize_to_tray', v)} />}
         />
         <SettingRow
@@ -35,37 +35,20 @@ export function GeneralPanel() {
 
       <Group title="Behavior">
         <SettingRow
-          icon={<I.copy size={14} />}
-          label="Auto-paste result"
-          hint="After a transformation, paste back into the source field automatically."
-          control={<Toggle value={settings.auto_paste} onChange={(v) => set('auto_paste', v)} />}
-        />
-        <SettingRow
           icon={<I.bell size={14} />}
           label="Show notifications"
+          hint="Mode-switch HUD plus native Windows toasts when the main window is hidden."
           control={<Toggle value={settings.notifications} onChange={(v) => set('notifications', v)} />}
         />
         <SettingRow
           icon={<I.sparkles size={14} />}
           label="Stream AI response"
-          hint="Show tokens as they arrive. Disable for faster perceived completion on slow networks."
+          hint="Show tokens as they arrive. Disable for slow networks or proxies that buffer SSE poorly."
           control={<Toggle value={settings.stream_response} onChange={(v) => set('stream_response', v)} />}
-        />
-        <SettingRow
-          icon={<I.clipboard size={14} />}
-          label="Clipboard fallback"
-          hint="If selection capture fails, use the clipboard contents instead."
-          control={<Toggle value={settings.clipboard_fallback} onChange={(v) => set('clipboard_fallback', v)} />}
         />
       </Group>
 
       <Group title="Performance">
-        <SettingRow
-          icon={<I.cpu size={14} />}
-          label="Low memory mode"
-          hint="Reduces background workers — slower first response, ~80MB less RAM."
-          control={<Toggle value={settings.low_memory_mode} onChange={(v) => set('low_memory_mode', v)} />}
-        />
         <SettingRow
           icon={<I.refresh size={14} />}
           label="Response timeout"

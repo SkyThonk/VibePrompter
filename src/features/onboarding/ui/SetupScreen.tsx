@@ -1,42 +1,97 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  I,
-  Kbd,
-  PhButton,
-  PhInput,
-  ProviderGlyphs,
-  SelectCard,
-} from '@shared/ui';
+import { I, PhButton, PhInput, useToast } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
-import { useProvidersQuery, useModesQuery } from '../application/setup.query';
-import { useValidateKeyMutation } from '../application/validateKey.command';
-import type { ProviderId } from '../domain';
-import { StepIndicator } from './StepIndicator';
-import { GroupHead } from './GroupHead';
 
-const GLYPHS: Record<ProviderId, () => React.ReactNode> = {
-  openai: () => ProviderGlyphs.openai(20),
-  anthropic: () => ProviderGlyphs.anthropic(18),
-  gemini: () => ProviderGlyphs.gemini(20),
-  ollama: () => ProviderGlyphs.ollama(20),
-};
+/**
+ * First-run onboarding. The job is one thing: get the user a working
+ * connection so they can immediately do something. Pick a preset (or skip
+ * to manual), paste a key, click "Test & finish" — we test the connection
+ * and only on success mark the install onboarded and route to the dashboard.
+ *
+ * Skip-for-now is allowed (developers, demos, anyone who wants to configure
+ * later) — `mark_first_run_done` still fires so we don't loop back here.
+ */
+interface Preset {
+  id: string;
+  label: string;
+  baseUrl: string;
+  kind: 'openai' | 'anthropic';
+  defaultModel: string;
+  keyHint: string;
+}
+
+const PRESETS: Preset[] = [
+  { id: 'openai',     label: 'OpenAI',         baseUrl: 'https://api.openai.com/v1',           kind: 'openai',    defaultModel: 'gpt-4o-mini',          keyHint: 'sk-…' },
+  { id: 'anthropic',  label: 'Anthropic',      baseUrl: 'https://api.anthropic.com',           kind: 'anthropic', defaultModel: 'claude-sonnet-4-6',    keyHint: 'sk-ant-…' },
+  { id: 'openrouter', label: 'OpenRouter',     baseUrl: 'https://openrouter.ai/api/v1',        kind: 'openai',    defaultModel: 'openai/gpt-4o-mini',   keyHint: 'sk-or-…' },
+  { id: 'groq',       label: 'Groq',           baseUrl: 'https://api.groq.com/openai/v1',      kind: 'openai',    defaultModel: 'llama-3.3-70b-versatile', keyHint: 'gsk_…' },
+  { id: 'gemini',     label: 'Gemini',         baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai', defaultModel: 'gemini-2.0-flash', keyHint: 'AIza…' },
+  { id: 'ollama',     label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1',           kind: 'openai',    defaultModel: 'llama3.2',             keyHint: '(none — local server)' },
+];
 
 export function SetupScreen() {
   const navigate = useNavigate();
-  const [provider, setProvider] = useState<ProviderId>('openai');
-  const [apiKey, setApiKey] = useState('sk-proj-7Kx9_••••••••••••••••••••••••PqR4');
-  const [keyVis, setKeyVis] = useState(false);
-  const [validated, setValidated] = useState(true);
-  const [defaultMode, setDefaultMode] = useState('developer');
-  const [modeOpen, setModeOpen] = useState(false);
+  const toast = useToast();
+  const [preset, setPreset] = useState<Preset>(PRESETS[0]);
+  const [label, setLabel] = useState(PRESETS[0].label);
+  const [apiKey, setApiKey] = useState('');
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [model, setModel] = useState(PRESETS[0].defaultModel);
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState<'idle' | 'saving' | 'testing'>('idle');
 
-  const { data: providers = [] } = useProvidersQuery();
-  const { data: modes = [] } = useModesQuery();
-  const validate = useValidateKeyMutation();
+  const pickPreset = (p: Preset) => {
+    setPreset(p);
+    setLabel(p.label);
+    setModel(p.defaultModel);
+  };
 
-  const onValidate = () =>
-    validate.mutate(apiKey, { onSuccess: (r) => setValidated(r.valid) });
+  const finishWithoutTest = async () => {
+    setBusy(true);
+    try {
+      await invokeCommand<void>('mark_first_run_done');
+    } catch {}
+    setBusy(false);
+    navigate('/');
+  };
+
+  const finish = async () => {
+    setBusy(true);
+    try {
+      setStage('saving');
+      const saved = await invokeCommand<{ id: string; label: string }>('save_connection', {
+        input: {
+          id: null,
+          label: label.trim() || preset.label,
+          kind: preset.kind,
+          baseUrl: preset.baseUrl,
+          apiKey: apiKey.trim(),
+          defaultModel: model.trim() || preset.defaultModel,
+          isDefault: true,
+        },
+      });
+
+      // If they gave us a key, validate it immediately — fast feedback on
+      // typos or wrong vendor. Local presets (Ollama with no key) skip this.
+      if (apiKey.trim()) {
+        setStage('testing');
+        await invokeCommand<void>('test_connection', { id: saved.id });
+      }
+
+      await invokeCommand<void>('mark_first_run_done');
+      toast.ok(
+        `${saved.label} is set as your default connection.`,
+        'You are all set'
+      );
+      navigate('/');
+    } catch (e) {
+      toast.err(typeof e === 'string' ? e : String(e), 'Setup failed');
+    } finally {
+      setBusy(false);
+      setStage('idle');
+    }
+  };
 
   return (
     <div
@@ -47,200 +102,119 @@ export function SetupScreen() {
       }}
     >
       <div className="max-w-[640px] mx-auto px-8 pt-10 pb-12 flex flex-col gap-6">
-        {/* Welcome */}
-        <div className="flex items-center gap-3.5 mb-1">
+        <header className="flex items-center gap-3.5 mb-1">
           <span className="ph-mark xl" />
-          <div>
-            <div
-              className="text-[22px] font-semibold text-fg-strong"
-              style={{ letterSpacing: '-0.02em' }}
-            >
-              Welcome to PromptHelper
-            </div>
-            <div className="text-[13.5px] text-fg-mute mt-0.5">
-              Transform text anywhere on your PC using AI — three steps to go.
-            </div>
+          <div className="flex-1">
+            <h1 className="m-0 text-[26px] font-semibold text-fg-strong" style={{ letterSpacing: '-0.025em' }}>
+              Welcome to VibePrompter
+            </h1>
+            <p className="m-0 text-fg-mute text-[13px] mt-1">
+              Connect a model provider and you are ready to run prompts.
+            </p>
           </div>
-        </div>
+        </header>
 
-        <StepIndicator
-          steps={[
-            { n: '1', label: 'Provider', done: true },
-            { n: '2', label: 'API Key', done: true },
-            { n: '3', label: 'Preferences', active: true },
-          ]}
-        />
-
-        {/* Providers */}
-        <section>
-          <GroupHead
-            title="AI Provider"
-            hint="Choose where requests go. You can connect more later."
-          />
-          <div className="grid grid-cols-2 gap-2">
-            {providers.map((p) => (
-              <SelectCard
-                key={p.id}
-                icon={GLYPHS[p.id]()}
-                title={p.name}
-                hint={p.hint}
-                accent={p.accent}
-                selected={provider === p.id}
-                onClick={() => setProvider(p.id)}
-                status={
-                  provider === p.id && (
-                    <span className="text-accent">
-                      <I.check size={14} sw={2.2} />
-                    </span>
-                  )
-                }
-              />
-            ))}
-          </div>
-        </section>
-
-        {/* API Key */}
-        <section>
-          <GroupHead
-            title="API Key"
-            hint="Stored locally in the OS keychain. Never sent to our servers."
-          />
-          <PhInput
-            mono
-            value={apiKey}
-            onChange={(e) => {
-              setApiKey(e.target.value);
-              setValidated(false);
-            }}
-            type={keyVis ? 'text' : 'password'}
-            placeholder="sk-…"
-            size="lg"
-            icon={<I.link size={14} />}
-            suffix={
-              <div className="flex gap-1">
+        <section
+          className="rounded-xl p-5 flex flex-col gap-4"
+          style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+        >
+          <Field label="Provider">
+            <div className="flex flex-wrap gap-1.5">
+              {PRESETS.map((p) => (
                 <button
+                  key={p.id}
                   type="button"
-                  onClick={() => setKeyVis((v) => !v)}
-                  className="w-7 h-7 border-0 bg-transparent text-fg-mute flex items-center justify-center rounded-md cursor-pointer"
+                  onClick={() => pickPreset(p)}
+                  className="text-[12.5px] px-3 py-1.5 rounded-md transition-colors"
+                  style={{
+                    background: preset.id === p.id ? 'var(--accent-tint)' : 'var(--surface-2)',
+                    color: preset.id === p.id ? 'var(--accent)' : 'var(--fg)',
+                    border: `.5px solid ${preset.id === p.id ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                    cursor: 'pointer',
+                  }}
                 >
-                  {keyVis ? <I.eyeOff size={14} /> : <I.eye size={14} />}
+                  {p.label}
                 </button>
-                <PhButton
-                  size="sm"
-                  variant={validated ? 'ghost' : 'subtle'}
-                  icon={validated ? <I.check size={12} sw={2.4} /> : null}
-                  onClick={onValidate}
-                >
-                  {validated ? 'Valid' : 'Validate'}
-                </PhButton>
-              </div>
-            }
-          />
-          {validated && (
-            <div className="mt-2 flex items-center gap-1.5 text-[11.5px] text-ok">
-              <span className="dot ok" />
-              Connected — 6 models available
+              ))}
             </div>
-          )}
-        </section>
+          </Field>
 
-        {/* Shortcut */}
-        <section>
-          <GroupHead
-            title="Global Shortcut"
-            hint="Press this anywhere to summon PromptHelper."
-          />
-          <div className="flex items-center gap-2.5 p-3.5 bg-surface border-[0.5px] border-border rounded-lg">
-            <I.keyboard size={18} style={{ color: 'var(--fg-mute)' }} />
-            <span className="flex-1 text-[13px] text-fg-mute">Open Command Palette</span>
-            <Kbd keys={['Ctrl', 'Shift', 'Space']} size="lg" />
-            <PhButton size="sm" variant="ghost">
-              Change
-            </PhButton>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Label">
+              <PhInput value={label} onChange={setLabel} placeholder={preset.label} />
+            </Field>
+            <Field label="Default model">
+              <PhInput value={model} onChange={setModel} placeholder={preset.defaultModel} mono />
+            </Field>
           </div>
-        </section>
 
-        {/* Default mode */}
-        <section>
-          <GroupHead title="Default Mode" hint="Used when no mode is selected." />
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setModeOpen((o) => !o)}
-              className="w-full text-left cursor-pointer h-10 px-3.5 rounded-md flex items-center gap-2.5 text-fg text-[13.5px]"
-              style={{
-                background: 'var(--surface-2)',
-                border: '.5px solid var(--border-strong)',
-              }}
-            >
-              <I.layers size={14} style={{ color: 'var(--accent)' }} />
-              {defaultMode.charAt(0).toUpperCase() + defaultMode.slice(1)}
-              <span className="flex-1" />
-              <I.chevD size={12} style={{ color: 'var(--fg-mute)' }} />
-            </button>
-            {modeOpen && (
-              <div
-                className="absolute left-0 right-0 p-1 rounded-md z-10 shadow-lg"
+          <Field label={`API key  (${preset.keyHint})`}>
+            <div className="flex gap-2 items-center">
+              <PhInput
+                value={apiKey}
+                onChange={setApiKey}
+                type={keyVisible ? 'text' : 'password'}
+                placeholder={preset.keyHint}
+              />
+              <button
+                type="button"
+                onClick={() => setKeyVisible((v) => !v)}
+                className="px-2 py-1 rounded"
                 style={{
-                  top: 'calc(100% + 4px)',
                   background: 'var(--surface-2)',
-                  border: '.5px solid var(--border-strong)',
+                  border: '.5px solid var(--border)',
+                  color: 'var(--fg-mute)',
+                  cursor: 'pointer',
                 }}
+                title={keyVisible ? 'Hide key' : 'Show key'}
               >
-                {modes.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => {
-                      setDefaultMode(m.toLowerCase());
-                      setModeOpen(false);
-                    }}
-                    className="w-full text-left h-[30px] px-2.5 border-0 rounded text-[13px] cursor-pointer"
-                    style={{
-                      background:
-                        defaultMode === m.toLowerCase() ? 'var(--accent-tint)' : 'transparent',
-                      color: defaultMode === m.toLowerCase() ? 'var(--accent)' : 'var(--fg)',
-                    }}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+                {keyVisible ? <I.eyeOff size={14} /> : <I.eye size={14} />}
+              </button>
+            </div>
+            <span className="text-[11.5px] text-fg-dim mt-1">
+              Stored in your OS keyring (Windows Credential Manager / Keychain / libsecret).
+              Never sent anywhere except {preset.label}.
+            </span>
+          </Field>
         </section>
 
-        {/* Finish */}
-        <div className="flex items-center gap-3 pt-3 border-t-[0.5px] border-divider">
+        <div
+          className="flex items-center gap-3 pt-3"
+          style={{ borderTop: '.5px solid var(--divider)' }}
+        >
           <span className="flex-1 text-[11.5px] text-fg-mute">
-            You can change all of this later in Settings · <span className="kbd">⌘</span>
-            <span className="kbd ml-px">,</span>
+            You can add more connections, change keys, and customize prompt modes
+            later in Settings.
           </span>
-          <PhButton
-            variant="ghost"
-            size="md"
-            onClick={() => {
-              invokeCommand<void>('mark_first_run_done')
-                .catch(() => {})
-                .finally(() => navigate('/'));
-            }}
-          >
+          <PhButton variant="ghost" size="md" onClick={finishWithoutTest} disabled={busy}>
             Skip for now
           </PhButton>
           <PhButton
             variant="primary"
             size="md"
-            icon={<I.bolt size={14} />}
-            onClick={() => {
-              invokeCommand<void>('mark_first_run_done')
-                .catch(() => {})
-                .finally(() => navigate('/'));
-            }}
+            icon={busy ? undefined : <I.bolt size={14} />}
+            onClick={finish}
+            disabled={busy}
           >
-            Launch VibePrompter
+            {stage === 'saving'
+              ? 'Saving…'
+              : stage === 'testing'
+              ? 'Testing…'
+              : 'Save & finish'}
           </PhButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10.5px] uppercase tracking-[0.10em] text-fg-dim font-semibold">
+        {label}
+      </span>
+      {children}
     </div>
   );
 }

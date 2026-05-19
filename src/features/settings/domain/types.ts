@@ -49,11 +49,14 @@ export interface HistoryItem {
   mode: string;
   iconName: string;
   provider: string;
-  when: string;
+  /** RFC3339 timestamp of when the run finished. Display via relativeTime(). */
+  createdAt: string;
   ms: number;
   src: string;
   out: string;
-  fav?: boolean;
+  fav: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface ShortcutItem {
