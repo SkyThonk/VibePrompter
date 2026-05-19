@@ -4,6 +4,7 @@ import { AppRouter } from './router';
 import { BackendThemeBridge } from './BackendThemeBridge';
 import { ModeHud } from '@features/overlay-hud';
 import { RefineOverlay } from '@features/refine-overlay';
+import { WindowTitlebar } from '@shared/ui';
 
 /**
  * Read the current Tauri window label. In multi-window Tauri apps every
@@ -38,7 +39,12 @@ export function App() {
   return (
     <AppProviders>
       <BackendThemeBridge />
-      <AppRouter />
+      <div className="flex flex-col h-screen overflow-hidden">
+        <WindowTitlebar icon={<span className="ph-mark sm" />} />
+        <div className="flex-1 min-h-0 overflow-auto">
+          <AppRouter />
+        </div>
+      </div>
     </AppProviders>
   );
 }

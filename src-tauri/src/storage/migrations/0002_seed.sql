@@ -15,11 +15,11 @@ INSERT OR IGNORE INTO prompt_modes (id, name, description, system_prompt, temper
  ('docs',      'Documentation', 'API & technical docs',                      'You write developer documentation. Lead with what the thing does, then how to use it. Use code fences for snippets. Avoid marketing language.',                                                                                            0.2, 1500, NULL, 'text',    0, 5, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
 
 INSERT OR IGNORE INTO shortcuts (id, label, hint, icon_name, accelerator, action, enabled, sort_order, updated_at) VALUES
- ('palette', 'Open Command Palette', 'The main entry point.',      'wand',      'Ctrl+Shift+Space', 'open_palette',     1, 0, '2026-01-01T00:00:00Z'),
- ('rewrite', 'Rewrite selection',    'Improve writing in place.',  'pen',       'Ctrl+Shift+R',     'rewrite_selection',1, 1, '2026-01-01T00:00:00Z'),
- ('grammar', 'Fix grammar',          'Quick grammar pass.',        'text',      'Ctrl+Shift+G',     'fix_grammar',      1, 2, '2026-01-01T00:00:00Z'),
- ('summary', 'Quick summarize',      'Compress to bullets.',       'summarize', 'Ctrl+Shift+S',     'summarize',        1, 3, '2026-01-01T00:00:00Z'),
- ('modes',   'Toggle modes',         'Cycle the active mode.',     'layers',    'Ctrl+Shift+M',     'mode_switch',      1, 4, '2026-01-01T00:00:00Z');
+ ('palette', 'Open Command Palette', 'The main entry point.',      'wand',      'Ctrl+Alt+Space',   'open_palette',     1, 0, '2026-01-01T00:00:00Z'),
+ ('rewrite', 'Rewrite selection',    'Improve writing in place.',  'pen',       'Ctrl+Alt+R',       'rewrite_selection',1, 1, '2026-01-01T00:00:00Z'),
+ ('grammar', 'Fix grammar',          'Quick grammar pass.',        'text',      'Ctrl+Alt+G',       'fix_grammar',      1, 2, '2026-01-01T00:00:00Z'),
+ ('summary', 'Quick summarize',      'Compress to bullets.',       'summarize', 'Ctrl+Alt+S',       'summarize',        1, 3, '2026-01-01T00:00:00Z'),
+ ('modes',   'Toggle modes',         'Cycle the active mode.',     'layers',    'Ctrl+Alt+M',       'mode_switch',      1, 4, '2026-01-01T00:00:00Z');
 
 INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
  ('boot_start',         'true',      '2026-01-01T00:00:00Z'),
@@ -32,7 +32,7 @@ INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
  ('low_memory_mode',    'false',     '2026-01-01T00:00:00Z'),
  ('response_timeout',   '30',        '2026-01-01T00:00:00Z'),
  ('concurrent_requests','3',         '2026-01-01T00:00:00Z'),
- ('theme',              '"dark"',    '2026-01-01T00:00:00Z'),
+ ('theme',              '"light"',   '2026-01-01T00:00:00Z'),
  ('accent',             '"violet"',  '2026-01-01T00:00:00Z'),
  ('density',            '"regular"', '2026-01-01T00:00:00Z'),
  ('history_retention',  '"30d"',     '2026-01-01T00:00:00Z'),

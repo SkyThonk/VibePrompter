@@ -50,6 +50,14 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_filter(|label| label != "mode-hud")
+                // Only restore geometry. The plugin's default includes
+                // Decorations, which would clobber `decorations: false` in
+                // tauri.conf.json on every launch after an older build saved
+                // state with native chrome enabled.
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION,
+                )
                 .build(),
         )
         // Pass `--autostart` to the OS-registered launcher so we can detect

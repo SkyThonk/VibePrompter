@@ -227,6 +227,7 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
     let modes = state.catalog.list_modes().await?;
     let tray_modes: Vec<TrayMode> = modes
         .into_iter()
+        .filter(|m| m.enabled)
         .map(|m| TrayMode { id: m.id, name: m.name, icon_name: Some(m.icon_name) })
         .collect();
     if tray_modes.is_empty() {
@@ -407,14 +408,8 @@ fn apply_active_mode(app: &AppHandle, next: TrayMode) -> AppResult<()> {
         }),
     );
 
-    // When the user is doing other work (main window not focused), the HUD
-    // still flashes on the cursor's monitor, but a native OS toast is a more
-    // persistent signal in the Action Center — they can re-read it after.
-    // Gated by the same `notifications` setting that gates the HUD.
-    if !main_window_is_focused(app) {
-        maybe_send_native_notification(app, &next);
-    }
-
+    // The HUD itself is enough signal for a mode switch; a duplicate native
+    // OS toast in the Action Center was felt as noise (see UX feedback).
     show_mode_hud_internal(
         app.clone(),
         ModeHudArgs {
@@ -507,36 +502,6 @@ mod tests {
         let s = TrayState::new_with_cursor(mk_modes(), 999);
         assert_eq!(s.current().id, "developer"); // 999 % 3 == 0
     }
-}
-
-fn main_window_is_focused(app: &AppHandle) -> bool {
-    app.get_webview_window("main")
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false)
-}
-
-fn maybe_send_native_notification(app: &AppHandle, m: &TrayMode) {
-    use tauri_plugin_notification::NotificationExt;
-    // Respect the same `notifications` user preference the HUD uses. A
-    // failed read or missing state defaults to NOT sending — prefer silence
-    // over surprise toasts.
-    let allowed = app
-        .try_state::<crate::app::state::AppState>()
-        .and_then(|s| {
-            let svc = s.settings.clone();
-            tauri::async_runtime::block_on(svc.get()).ok()
-        })
-        .map(|s| s.notifications)
-        .unwrap_or(false);
-    if !allowed {
-        return;
-    }
-    let _ = app
-        .notification()
-        .builder()
-        .title("VibePrompter")
-        .body(format!("Mode switched to {}", m.name))
-        .show();
 }
 
 pub fn show_main_window(app: &AppHandle) {

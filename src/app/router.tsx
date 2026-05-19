@@ -104,6 +104,7 @@ function LastRouteMemory() {
  */
 function WindowKeyboardShortcuts() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     function isEditable(target: EventTarget | null): boolean {
@@ -116,11 +117,14 @@ function WindowKeyboardShortcuts() {
     function handler(e: KeyboardEvent) {
       if (isEditable(e.target)) return;
 
-      // Esc — hide to tray. Skip when the user is in a modal/dialog so
-      // the dialog can consume it first (no current dialogs, but future-proof).
+      // Esc — back out of Settings to home; otherwise hide to tray.
       if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        invokeCommand<void>('hide_main_window').catch(() => {});
+        if (location.pathname.startsWith('/settings')) {
+          navigate('/');
+        } else {
+          invokeCommand<void>('hide_main_window').catch(() => {});
+        }
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -137,7 +141,7 @@ function WindowKeyboardShortcuts() {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate]);
+  }, [navigate, location.pathname]);
 
   return null;
 }

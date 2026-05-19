@@ -1,8 +1,8 @@
 [package]
-name = "app"
-version = "0.1.0"
+name = "VibePromter"
+version = "0.1.1"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Akash Jaiswal"]
 license = ""
 repository = ""
 edition = "2021"

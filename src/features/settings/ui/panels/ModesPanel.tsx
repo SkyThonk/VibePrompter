@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { I, PanelHead, PhButton, PhInput, Pill, type IconName } from '@shared/ui';
+import { I, PanelHead, PhButton, PhInput, Pill, Toggle, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
 /**
@@ -18,6 +18,7 @@ interface Mode {
   provider?: string | null;
   iconName: string;
   tags: string;
+  enabled: boolean;
 }
 
 interface Connection {
@@ -44,6 +45,7 @@ const blank = (): Mode => ({
   provider: null,
   iconName: 'bolt',
   tags: '',
+  enabled: true,
 });
 
 /**
@@ -52,7 +54,7 @@ const blank = (): Mode => ({
  * editor where they can tweak. Tested system prompts beat blank
  * prompt-prompt-anxiety for new users by a mile.
  */
-const TEMPLATES: Mode[] = [
+const TEMPLATES: Omit<Mode, 'enabled'>[] = [
   {
     id: '',
     name: 'Improve writing',
@@ -185,6 +187,18 @@ export function ModesPanel() {
     }
   };
 
+  const toggleEnabled = async (m: Mode, next: boolean) => {
+    setBusy(true);
+    try {
+      await invokeCommand<Mode>('save_mode', { mode: { ...m, enabled: next } });
+      reload();
+    } catch (e) {
+      setErr(typeof e === 'string' ? e : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const remove = async (id: string) => {
     if (!window.confirm('Delete this mode? The tray will fall back to remaining modes.')) return;
     setBusy(true);
@@ -286,6 +300,7 @@ export function ModesPanel() {
                 style={{
                   background: 'var(--surface)',
                   border: `.5px solid ${isActive ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                  opacity: m.enabled ? 1 : 0.55,
                 }}
               >
                 <span
@@ -303,6 +318,7 @@ export function ModesPanel() {
                       {m.name}
                     </span>
                     {isActive && <Pill tone="accent">active</Pill>}
+                    {!m.enabled && <Pill>disabled</Pill>}
                     {pinned && <Pill>{pinned}</Pill>}
                     {(m.tags ?? '')
                       .split(',')
@@ -317,7 +333,23 @@ export function ModesPanel() {
                     temp {m.temp} · max {m.maxTok} tok
                   </div>
                 </div>
-                {!isActive && (
+                <div
+                  className="flex items-center gap-1.5"
+                  title={
+                    isActive
+                      ? 'Active modes cannot be disabled — switch to another mode first.'
+                      : m.enabled
+                      ? 'Hide from tray, dashboard, and cycle rotation.'
+                      : 'Show in tray, dashboard, and cycle rotation.'
+                  }
+                >
+                  <Toggle
+                    value={m.enabled}
+                    onChange={(v) => toggleEnabled(m, v)}
+                    disabled={busy || isActive}
+                  />
+                </div>
+                {!isActive && m.enabled && (
                   <PhButton size="sm" variant="ghost" onClick={() => activate(m.id)}>
                     Make active
                   </PhButton>
@@ -394,7 +426,7 @@ export function ModesPanel() {
                     key={t.name}
                     type="button"
                     onClick={() => {
-                      setDraft({ ...t });
+                      setDraft({ ...t, enabled: true });
                       setErr(null);
                     }}
                     className="rounded-md p-3 flex items-start gap-2.5 text-left transition-colors"

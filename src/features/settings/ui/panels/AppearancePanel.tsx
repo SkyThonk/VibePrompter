@@ -11,7 +11,6 @@ const ACCENTS = [
 ];
 
 const THEMES = ['dark', 'light', 'system'] as const;
-const DENSITIES = ['compact', 'regular', 'comfy'] as const;
 
 export function AppearancePanel() {
   const { data: settings } = useAppSettingsQuery();
@@ -19,10 +18,8 @@ export function AppearancePanel() {
   if (!settings) return null;
   const theme = settings.theme as (typeof THEMES)[number];
   const accent = settings.accent;
-  const density = settings.density as (typeof DENSITIES)[number];
   const setTheme = (t: (typeof THEMES)[number]) => saveSettings.mutate({ ...settings, theme: t });
   const setAccent = (a: string) => saveSettings.mutate({ ...settings, accent: a });
-  const setDensity = (d: (typeof DENSITIES)[number]) => saveSettings.mutate({ ...settings, density: d });
 
   return (
     <>
@@ -94,34 +91,6 @@ export function AppearancePanel() {
               }}
             />
           ))}
-        </div>
-      </Group>
-
-      <Group title="Density">
-        <div className="p-3">
-          <div
-            className="inline-flex p-0.5 rounded-md"
-            style={{
-              background: 'var(--surface-2)',
-              border: '.5px solid var(--border)',
-            }}
-          >
-            {DENSITIES.map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDensity(d)}
-                className="px-3.5 py-1.5 border-0 cursor-pointer rounded-md text-[12.5px] font-medium"
-                style={{
-                  background: density === d ? 'var(--surface)' : 'transparent',
-                  color: density === d ? 'var(--fg)' : 'var(--fg-mute)',
-                  boxShadow: density === d ? 'var(--shadow-sm)' : 'none',
-                }}
-              >
-                {d.charAt(0).toUpperCase() + d.slice(1)}
-              </button>
-            ))}
-          </div>
         </div>
       </Group>
 

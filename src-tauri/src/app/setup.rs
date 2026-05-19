@@ -72,8 +72,9 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     // into AppState. Falls back to a minimal default if the seed is missing
     // for any reason — better to ship a tray than silently disable OS pieces.
     let tray_modes: Vec<crate::tray::TrayMode> = match catalog.list_modes().await {
-        Ok(modes) if !modes.is_empty() => modes
+        Ok(modes) if modes.iter().any(|m| m.enabled) => modes
             .into_iter()
+            .filter(|m| m.enabled)
             .map(|m| crate::tray::TrayMode {
                 id: m.id,
                 name: m.name,

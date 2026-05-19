@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useIsMutating } from '@tanstack/react-query';
-import { I, NavItem, PhInput, PhWindow, type IconName } from '@shared/ui';
+import { I, NavItem, PhInput, type IconName } from '@shared/ui';
 import { useTabsQuery } from '../application/settings.query';
 import type { SettingsTabId } from '../domain';
 import { searchSettings } from './settingsIndex';
@@ -33,16 +33,28 @@ export function SettingsWindow() {
 
   return (
     <div
-      className="ph-root min-h-screen p-6 flex items-center justify-center"
+      className="ph-root h-full flex flex-col"
       style={{ background: 'var(--bg)' }}
     >
-      <div style={{ width: 1040, height: 760, maxWidth: '100%' }}>
-        <PhWindow title="VibePrompter · Settings" icon={<span className="ph-mark sm" />}>
-          <div className="flex flex-1 min-h-0 bg-bg" style={{ height: 'calc(100% - 36px)' }}>
+      <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex flex-1 min-h-0 bg-bg">
             <aside
               className="w-[220px] flex-shrink-0 p-2.5 flex flex-col gap-2.5"
               style={{ borderRight: '.5px solid var(--border)', background: 'var(--bg-2)' }}
             >
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                className="flex items-center gap-1.5 px-2 py-1.5 mx-1 mt-0.5 text-[12px] text-fg-mute hover:text-fg rounded transition-colors"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                title="Back to home (Esc)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 12H5" />
+                  <path d="m12 19-7-7 7-7" />
+                </svg>
+                <span>Back</span>
+              </button>
               <div className="px-2 pt-1 pb-1.5">
                 <PhInput
                   size="sm"
@@ -126,7 +138,6 @@ export function SettingsWindow() {
               <Outlet />
             </main>
           </div>
-        </PhWindow>
       </div>
     </div>
   );

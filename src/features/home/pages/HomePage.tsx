@@ -21,6 +21,13 @@ interface CatalogMode {
   id: string;
   name: string;
   iconName: string;
+  desc: string;
+  sys: string;
+  temp: number;
+  maxTok: number;
+  provider?: string | null;
+  tags?: string;
+  enabled: boolean;
 }
 
 interface CompletionResult {
@@ -111,7 +118,9 @@ export function HomePage() {
 
   useEffect(() => {
     invokeCommand<ActiveMode>('get_active_mode').then(setActive).catch(() => {});
-    invokeCommand<CatalogMode[]>('list_modes').then(setModes).catch(() => setModes([]));
+    invokeCommand<CatalogMode[]>('list_modes')
+      .then((all) => setModes(all.filter((m) => m.enabled)))
+      .catch(() => setModes([]));
     invokeCommand<ShortcutBinding[]>('list_global_shortcuts')
       .then(setShortcuts)
       .catch(() => setShortcuts([]));
@@ -460,46 +469,138 @@ export function HomePage() {
           </section>
         )}
 
-        <section
-          className="rounded-xl p-5 flex items-center gap-4"
-          style={{
-            background: 'var(--surface)',
-            border: '.5px solid var(--border)',
-            boxShadow: 'var(--accent-glow)',
-          }}
-        >
-          <span
-            className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{
-              background: 'var(--accent-tint)',
-              color: 'var(--accent)',
-              border: '.5px solid var(--accent-tint-2)',
-            }}
-          >
-            <ActiveIcon size={22} />
-          </span>
-          <div className="flex-1 min-w-0">
-            <div
-              className="text-[10.5px] uppercase tracking-[0.12em] text-fg-dim font-semibold"
+        {(() => {
+          const activeFull = modes.find((m) => m.id === active?.id) ?? null;
+          const pinnedConn = activeFull?.provider
+            ? connections.find((c) => c.id === activeFull.provider) ?? null
+            : null;
+          const routedConn = pinnedConn ?? defaultConn ?? null;
+          const routedModel = routedConn?.defaultModel ?? '';
+          const routedLabel = routedConn
+            ? `${routedConn.label}${routedModel ? ` · ${routedModel}` : ''}`
+            : 'No provider — add one in Settings';
+          const promptPreview = (activeFull?.sys ?? '').trim();
+          return (
+            <section
+              className="rounded-xl p-5 flex flex-col gap-4"
+              style={{
+                background: 'var(--surface)',
+                border: '.5px solid var(--border)',
+                boxShadow: 'var(--accent-glow)',
+              }}
             >
-              Active mode
-            </div>
-            <div className="text-[20px] font-semibold text-fg-strong leading-tight">
-              {active?.name ?? '—'}
-            </div>
-          </div>
-          <PhButton
-            variant="primary"
-            size="md"
-            icon={<I.refresh size={14} />}
-            onClick={cycleMode}
-            title="Cycle to next mode (Ctrl+Shift+M globally, Ctrl+M in-window)"
-          >
-            {nextMode(active, modes)
-              ? `Cycle → ${nextMode(active, modes)!.name}`
-              : 'Cycle'}
-          </PhButton>
-        </section>
+              <div className="flex items-center gap-4">
+                <span
+                  className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{
+                    background: 'var(--accent-tint)',
+                    color: 'var(--accent)',
+                    border: '.5px solid var(--accent-tint-2)',
+                  }}
+                >
+                  <ActiveIcon size={22} />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10.5px] uppercase tracking-[0.12em] text-fg-dim font-semibold">
+                    Active mode
+                  </div>
+                  <div className="text-[20px] font-semibold text-fg-strong leading-tight">
+                    {active?.name ?? '—'}
+                  </div>
+                  {activeFull?.desc && (
+                    <div className="text-[12.5px] text-fg-mute mt-0.5 truncate">
+                      {activeFull.desc}
+                    </div>
+                  )}
+                </div>
+                <PhButton
+                  variant="primary"
+                  size="md"
+                  icon={<I.refresh size={14} />}
+                  onClick={cycleMode}
+                  title="Cycle to next mode (Ctrl+Alt+M globally, Ctrl+M in-window)"
+                >
+                  {nextMode(active, modes)
+                    ? `Cycle → ${nextMode(active, modes)!.name}`
+                    : 'Cycle'}
+                </PhButton>
+              </div>
+
+              <div
+                className="grid gap-3 pt-3"
+                style={{
+                  gridTemplateColumns: '180px 1fr auto',
+                  borderTop: '.5px solid var(--divider)',
+                  alignItems: 'start',
+                }}
+              >
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-[10px] uppercase tracking-[0.10em] text-fg-dim font-semibold">
+                    Routes through
+                  </span>
+                  <span
+                    className="text-[12.5px] truncate"
+                    style={{ color: routedConn ? 'var(--fg-strong)' : 'var(--danger)' }}
+                    title={routedLabel}
+                  >
+                    {routedLabel}
+                  </span>
+                  {pinnedConn && (
+                    <span className="text-[10.5px] text-fg-dim">Pinned to this mode</span>
+                  )}
+                  {!pinnedConn && defaultConn && activeFull && (
+                    <span className="text-[10.5px] text-fg-dim">Workspace default</span>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-[10px] uppercase tracking-[0.10em] text-fg-dim font-semibold">
+                    System prompt
+                  </span>
+                  {promptPreview ? (
+                    <span
+                      className="text-[12.5px] text-fg-mute"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        lineHeight: 1.45,
+                      }}
+                      title={promptPreview}
+                    >
+                      {promptPreview}
+                    </span>
+                  ) : (
+                    <span className="text-[12px] text-fg-dim italic">No system prompt set</span>
+                  )}
+                  {activeFull && (
+                    <span className="text-[10.5px] text-fg-dim ph-mono">
+                      temp {activeFull.temp} · max {activeFull.maxTok} tok
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => navigate('/settings/modes')}
+                  className="text-[12px] self-start"
+                  style={{
+                    background: 'transparent',
+                    border: '.5px solid var(--border)',
+                    color: 'var(--fg)',
+                    borderRadius: 6,
+                    padding: '6px 10px',
+                    cursor: 'pointer',
+                  }}
+                  title="Edit this mode in Settings"
+                >
+                  Edit prompt →
+                </button>
+              </div>
+            </section>
+          );
+        })()}
 
         {connections.length === 0 ? (
           <section
@@ -976,10 +1077,19 @@ export function HomePage() {
                       border: '.5px solid var(--border-strong)',
                     }}
                   >
-                    Ctrl+Shift+Space
+                    Ctrl+Alt+V
                   </kbd>{' '}
-                  anywhere to open the command palette and run your first
-                  prompt.
+                  anywhere to open the app, or{' '}
+                  <kbd
+                    className="ph-mono text-[10.5px] px-1 py-0.5 rounded"
+                    style={{
+                      background: 'var(--surface-2)',
+                      border: '.5px solid var(--border-strong)',
+                    }}
+                  >
+                    Ctrl+Alt+Space
+                  </kbd>{' '}
+                  to refine highlighted text in any app.
                 </div>
               </div>
             </div>

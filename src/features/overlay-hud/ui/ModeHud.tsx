@@ -84,11 +84,14 @@ export function ModeHud() {
     };
   }, []);
 
+  // The ph-hud-popup keyframe is 1500ms; give it a small tail so the final
+  // fade-out frame actually paints before the OS window is hidden. Without
+  // this buffer the card visibly snaps off on slower frames.
   useEffect(() => {
     if (counter === 0) return;
     const id = window.setTimeout(() => {
       getCurrentWindow().hide().catch(() => {});
-    }, 1500);
+    }, 1600);
     return () => window.clearTimeout(id);
   }, [counter]);
 
@@ -122,8 +125,8 @@ export function ModeHud() {
           gap: 14,
           padding: '12px 18px',
           background: 'var(--glass)',
-          backdropFilter: 'blur(40px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+          backdropFilter: 'blur(20px) saturate(160%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(160%)',
           border: '.5px solid var(--border-strong)',
           borderRadius: 14,
           boxShadow:

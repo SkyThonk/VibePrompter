@@ -91,9 +91,14 @@ fn dispatch(app: &AppHandle, action: &str) {
         // replacement — paste-back is gated behind the Accept button so
         // we never silently overwrite their selection.
         "rewrite_selection" | "fix_grammar" | "summarize" => {
+            let kind = match action {
+                "fix_grammar" => crate::overlay::RefineKind::Grammar,
+                "summarize" => crate::overlay::RefineKind::Summarize,
+                _ => crate::overlay::RefineKind::Rewrite,
+            };
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = crate::overlay::begin(app.clone()).await {
+                if let Err(e) = crate::overlay::begin(app.clone(), kind).await {
                     let msg = e.to_string();
                     tracing::warn!("refine begin failed: {msg}");
                     // Specific recovery path for the most common failure

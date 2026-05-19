@@ -18,8 +18,11 @@ import { I, type IconName } from '@shared/ui';
  * `refine_retry`. Accept hides the window and synthesizes Ctrl+V into the
  * (still-focused) source app.
  */
+type RefineKind = 'rewrite' | 'grammar' | 'summarize';
+
 interface ResetPayload {
   selection: string;
+  kind?: RefineKind;
   modeId: string;
   modeName: string;
   iconName?: string | null;
@@ -37,9 +40,22 @@ export function RefineOverlay() {
   const [done, setDone] = useState<DonePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bufRef = useRef('');
+  const flushPendingRef = useRef(false);
   // Set true while we're in the Accept handoff so the blur-to-dismiss
   // listener doesn't race the accept's own hide → undo the clipboard.
   const acceptingRef = useRef(false);
+
+  // Coalesce streamed token deltas into one React paint per animation frame.
+  // Without this a fast provider's per-token setState pegs WebView2 against
+  // the blurred card and produces visible jank.
+  const scheduleFlush = () => {
+    if (flushPendingRef.current) return;
+    flushPendingRef.current = true;
+    requestAnimationFrame(() => {
+      flushPendingRef.current = false;
+      setText(bufRef.current);
+    });
+  };
 
   // Body must be transparent so the OS window's transparency actually shows.
   useEffect(() => {
@@ -85,6 +101,15 @@ export function RefineOverlay() {
         bufRef.current = '';
         setDone(null);
         setError(null);
+        // Windows often refuses cross-process focus-steal on show(),
+        // leaving the first click consumed by window activation. Pull
+        // focus back into the webview as soon as the new session begins.
+        try {
+          window.focus();
+          getCurrentWindow().setFocus().catch(() => {});
+        } catch {
+          /* ignore */
+        }
       }),
       listen('refine:reset_text', () => {
         setText('');
@@ -94,7 +119,7 @@ export function RefineOverlay() {
       }),
       listen<string>('refine:token', (e) => {
         bufRef.current += e.payload;
-        setText(bufRef.current);
+        scheduleFlush();
       }),
       listen<DonePayload>('refine:done', (e) => {
         setDone(e.payload);
@@ -142,7 +167,11 @@ export function RefineOverlay() {
         reject();
       } else if (e.key === 'Enter' && !e.shiftKey && done) {
         e.preventDefault();
-        accept();
+        if (meta?.kind === 'summarize') {
+          copyAndHide();
+        } else {
+          accept();
+        }
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
         retry();
@@ -150,7 +179,7 @@ export function RefineOverlay() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [done, text]);
+  }, [done, text, meta?.kind]);
 
   function accept() {
     acceptingRef.current = true;
@@ -168,11 +197,33 @@ export function RefineOverlay() {
   function retry() {
     invoke<void>('refine_retry').catch(() => {});
   }
+  function copyAndHide() {
+    if (!text) return;
+    // Use the browser clipboard API (the refine-overlay webview already has
+    // clipboard-write via core:default). Restoring the user's prior clipboard
+    // is the refine_reject path's job, so we just dismiss the overlay after.
+    navigator.clipboard.writeText(text).catch(() => {});
+    getCurrentWindow().hide().catch(() => {});
+  }
 
-  const iconKey = (meta?.iconName ?? 'wand') as IconName;
+  const kind: RefineKind = meta?.kind ?? 'rewrite';
+  const isSummarize = kind === 'summarize';
+  const isGrammar = kind === 'grammar';
+  const iconKey = (meta?.iconName ?? (isSummarize ? 'summarize' : isGrammar ? 'text' : 'wand')) as IconName;
   const ModeIcon =
     (I as Record<string, React.ComponentType<{ size?: number }>>)[iconKey] ?? I.wand;
   const streaming = !done && !error;
+  const subtitle = streaming
+    ? isSummarize
+      ? 'Summarizing…'
+      : isGrammar
+      ? 'Fixing grammar…'
+      : 'Refining…'
+    : error
+    ? 'Failed'
+    : done
+    ? `${done.model} · ${done.latencyMs}ms`
+    : 'Ready';
 
   return (
     <div
@@ -194,8 +245,8 @@ export function RefineOverlay() {
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--glass)',
-          backdropFilter: 'blur(40px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+          backdropFilter: 'blur(20px) saturate(160%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(160%)',
           border: '.5px solid var(--border-strong)',
           borderRadius: 14,
           boxShadow:
@@ -233,13 +284,7 @@ export function RefineOverlay() {
               {meta?.modeName ?? 'Refine'}
             </div>
             <div style={{ fontSize: 10.5, color: 'var(--fg-dim)' }}>
-              {streaming
-                ? 'Refining…'
-                : error
-                ? 'Failed'
-                : done
-                ? `${done.model} · ${done.latencyMs}ms`
-                : 'Ready'}
+              {subtitle}
             </div>
           </div>
           {streaming && (
@@ -269,6 +314,24 @@ export function RefineOverlay() {
             }}
           >
             {error}
+          </div>
+        ) : isSummarize ? (
+          <div
+            style={{
+              flex: 1,
+              overflow: 'auto',
+              padding: '12px 14px',
+              color: 'var(--fg-strong)',
+              fontSize: 13,
+              lineHeight: 1.55,
+              background: 'transparent',
+            }}
+          >
+            {text ? (
+              <BulletBlock text={text} showCaret={streaming} />
+            ) : (
+              <span style={{ color: 'var(--fg-dim)' }}>Summarizing your selection…</span>
+            )}
           </div>
         ) : streaming || !done ? (
           <div
@@ -341,7 +404,10 @@ export function RefineOverlay() {
         >
           <button
             type="button"
-            onClick={reject}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              reject();
+            }}
             title="Cancel (Esc)"
             style={btnStyle('ghost')}
           >
@@ -349,26 +415,53 @@ export function RefineOverlay() {
             Cancel
           </button>
           <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={retry}
-            disabled={streaming}
-            title="Retry (Ctrl+R)"
-            style={btnStyle('ghost', streaming)}
-          >
-            <I.refresh size={12} />
-            Retry
-          </button>
-          <button
-            type="button"
-            onClick={accept}
-            disabled={!done || !text}
-            title="Accept and paste (Enter)"
-            style={btnStyle('primary', !done || !text)}
-          >
-            <I.check size={12} />
-            Replace
-          </button>
+          {isSummarize ? (
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                if (!done || !text) return;
+                e.preventDefault();
+                copyAndHide();
+              }}
+              disabled={!done || !text}
+              title="Copy summary to clipboard (Enter)"
+              style={btnStyle('primary', !done || !text)}
+            >
+              <I.check size={12} />
+              Copy
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  if (streaming) return;
+                  e.preventDefault();
+                  retry();
+                }}
+                disabled={streaming}
+                title="Retry (Ctrl+R)"
+                style={btnStyle('ghost', streaming)}
+              >
+                <I.refresh size={12} />
+                Retry
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  if (!done || !text) return;
+                  e.preventDefault();
+                  accept();
+                }}
+                disabled={!done || !text}
+                title="Accept and paste (Enter)"
+                style={btnStyle('primary', !done || !text)}
+              >
+                <I.check size={12} />
+                Replace
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -409,4 +502,71 @@ function btnStyle(
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
   };
+}
+
+/**
+ * Lightweight bullet renderer for the Summarize output. The model is
+ * instructed to emit one short bullet per line prefixed with `- ` (or `* `);
+ * we render those as `<li>` and fall back to plain paragraphs for anything
+ * else. A trailing caret blinks while streaming. Intentionally not a full
+ * Markdown parser — the prompt constrains the shape enough that a fancier
+ * library would just add weight.
+ */
+function BulletBlock({ text, showCaret }: { text: string; showCaret: boolean }) {
+  const lines = text.split('\n');
+  const blocks: Array<{ kind: 'bullet' | 'para'; items: string[] }> = [];
+  for (const raw of lines) {
+    const line = raw.replace(/^\s+/, '');
+    if (!line) continue;
+    const isBullet = /^[-*•]\s+/.test(line);
+    const body = isBullet ? line.replace(/^[-*•]\s+/, '') : line;
+    const last = blocks[blocks.length - 1];
+    if (isBullet) {
+      if (last?.kind === 'bullet') last.items.push(body);
+      else blocks.push({ kind: 'bullet', items: [body] });
+    } else {
+      if (last?.kind === 'para') last.items.push(body);
+      else blocks.push({ kind: 'para', items: [body] });
+    }
+  }
+
+  const caret = showCaret ? (
+    <span
+      className="ph-caret"
+      style={{
+        display: 'inline-block',
+        width: 6,
+        height: 14,
+        marginLeft: 4,
+        background: 'var(--accent)',
+        verticalAlign: 'text-bottom',
+      }}
+    />
+  ) : null;
+  const lastIdx = blocks.length - 1;
+
+  return (
+    <>
+      {blocks.map((b, bi) => {
+        if (b.kind === 'bullet') {
+          return (
+            <ul key={bi} style={{ margin: 0, paddingLeft: 18 }}>
+              {b.items.map((it, i) => (
+                <li key={i} style={{ marginBottom: 4 }}>
+                  {it}
+                  {bi === lastIdx && i === b.items.length - 1 && caret}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={bi} style={{ margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>
+            {b.items.join(' ')}
+            {bi === lastIdx && caret}
+          </p>
+        );
+      })}
+    </>
+  );
 }

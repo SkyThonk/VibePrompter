@@ -24,11 +24,72 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::models::{ChatMessage, CompletionParams};
 use crate::utils::{AppError, AppResult};
 
+/// Which user-facing action launched the overlay. Determines the prompt, the
+/// header label, and the available actions in the overlay UI:
+///
+///   - `Rewrite`   — uses the active prompt mode end-to-end; full action set
+///                   (Cancel / Retry / Replace).
+///   - `Grammar`   — uses a fixed grammar-fix prompt regardless of active
+///                   mode; same action set as Rewrite (you usually want to
+///                   paste the corrected text back).
+///   - `Summarize` — uses a fixed summarization prompt; output is rendered as
+///                   bullets and the only commit action is Copy (we do not
+///                   paste a summary back over the source text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RefineKind {
+    Rewrite,
+    Grammar,
+    Summarize,
+}
+
+impl RefineKind {
+    fn label(self) -> &'static str {
+        match self {
+            RefineKind::Rewrite => "Refine",
+            RefineKind::Grammar => "Fix grammar",
+            RefineKind::Summarize => "Summarize",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            RefineKind::Rewrite => "wand",
+            RefineKind::Grammar => "text",
+            RefineKind::Summarize => "summarize",
+        }
+    }
+
+    /// Built-in prompts for Grammar/Summarize so the action is consistent
+    /// regardless of which prompt mode the user happens to have active.
+    /// `Rewrite` returns None so the caller falls back to the active mode's
+    /// own system prompt + sampling.
+    fn builtin_prompt(self) -> Option<&'static str> {
+        match self {
+            RefineKind::Rewrite => None,
+            RefineKind::Grammar => Some(
+                "Fix grammar, punctuation, and spelling in the user's text. \
+                 Preserve meaning, tone, and language exactly. Reply with \
+                 ONLY the corrected text — no preamble, no explanation, no \
+                 quotes.",
+            ),
+            RefineKind::Summarize => Some(
+                "Summarize the user's text as a tight bulleted list of the \
+                 most important points. Use one short bullet per idea, each \
+                 line starting with `- `. No preamble, no closing remarks.",
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct RefineSession {
     pub original_clipboard: Mutex<Option<String>>,
     pub selection: Mutex<Option<String>>,
     pub mode_id: Mutex<Option<String>>,
+    /// Kind of refine session in flight. `retry` consults this so the
+    /// rerun uses the same prompt/label the user originally launched with.
+    pub kind: Mutex<Option<RefineKind>>,
     /// Monotonic stream id. Bumped on every `begin` / `retry` / `reject`
     /// so the previous stream's still-arriving tokens can be detected as
     /// stale and dropped. Stops Retry from interleaving the prior run's
@@ -43,29 +104,92 @@ pub fn init(app: &AppHandle) {
 fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-    std::thread::sleep(Duration::from_millis(80));
+    // Clear the clipboard before synthesizing Ctrl+C. We used to compare the
+    // post-copy clipboard against `prior` to detect "did the copy actually
+    // succeed?", but that false-negatived whenever the user's clipboard
+    // already contained the same string they were selecting (e.g. they just
+    // pasted it). Clearing first means *any* non-empty text afterward is
+    // proof of capture. `prior` is still passed in so the higher-level flow
+    // can restore it after Accept/Reject.
+    let _ = app.clipboard().write_text(String::new());
+
+    // Short settle so enigo's input arrives after the OS finishes processing
+    // the hotkey press. The bigger problem — modifiers still physically held
+    // — is handled by the modifier-release calls inside `synth_copy` plus the
+    // 250ms back-off + retry path below, so this initial pause stays small to
+    // keep the common-case latency snappy.
+    std::thread::sleep(Duration::from_millis(40));
 
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| AppError::Config(format!("enigo init: {e}")))?;
-    enigo
-        .key(Key::Control, Direction::Press)
-        .map_err(|e| AppError::Config(format!("ctrl press: {e}")))?;
-    enigo
-        .key(Key::Unicode('c'), Direction::Click)
-        .map_err(|e| AppError::Config(format!("c click: {e}")))?;
-    enigo
-        .key(Key::Control, Direction::Release)
-        .map_err(|e| AppError::Config(format!("ctrl release: {e}")))?;
 
-    let deadline = std::time::Instant::now() + Duration::from_millis(400);
-    while std::time::Instant::now() < deadline {
+    // One attempt = release any modifier the OS still considers down, then
+    // synthesize Ctrl+C. Idempotent — releasing an already-released key is a
+    // no-op. We try twice with a longer settle between attempts so a long
+    // physical key hold doesn't prevent capture.
+    let synth_copy = |e: &mut Enigo| -> AppResult<()> {
+        let _ = e.key(Key::Alt, Direction::Release);
+        let _ = e.key(Key::Shift, Direction::Release);
+        let _ = e.key(Key::Meta, Direction::Release);
+        let _ = e.key(Key::Control, Direction::Release);
         std::thread::sleep(Duration::from_millis(40));
-        if let Ok(text) = app.clipboard().read_text() {
-            if Some(&text) != prior.as_ref() && !text.trim().is_empty() {
-                return Ok(text);
+        e.key(Key::Control, Direction::Press)
+            .map_err(|err| AppError::Config(format!("ctrl press: {err}")))?;
+        e.key(Key::Unicode('c'), Direction::Click)
+            .map_err(|err| AppError::Config(format!("c click: {err}")))?;
+        e.key(Key::Control, Direction::Release)
+            .map_err(|err| AppError::Config(format!("ctrl release: {err}")))?;
+        Ok(())
+    };
+
+    synth_copy(&mut enigo)?;
+
+    tracing::debug!(
+        "capture_selection: prior_clipboard_len={}, polling for non-empty text…",
+        prior.as_ref().map(|s| s.len()).unwrap_or(0)
+    );
+
+    // Clipboard was cleared above, so any non-empty text post-Ctrl+C is the
+    // captured selection. Comparing against `prior` would false-negative when
+    // the user's prior clipboard text equals the selection.
+    let poll_for = |window_ms: u64| -> Option<String> {
+        let deadline = std::time::Instant::now() + Duration::from_millis(window_ms);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(40));
+            if let Ok(text) = app.clipboard().read_text() {
+                if !text.trim().is_empty() {
+                    return Some(text);
+                }
             }
         }
+        None
+    };
+
+    // First attempt — wait ~500ms for the clipboard to change.
+    if let Some(text) = poll_for(500) {
+        return Ok(text);
     }
+
+    // Second attempt — modifiers may still have been held during the first
+    // synthesis. Wait longer, then re-synthesize and poll again.
+    tracing::debug!("capture_selection: first attempt produced no change, retrying");
+    std::thread::sleep(Duration::from_millis(250));
+    synth_copy(&mut enigo)?;
+    if let Some(text) = poll_for(600) {
+        return Ok(text);
+    }
+
+    let last_seen = app
+        .clipboard()
+        .read_text()
+        .map(|s| s.len() as i64)
+        .unwrap_or(-1);
+    tracing::warn!(
+        "capture_selection: both attempts produced no clipboard change \
+         (prior_len={}, last_seen_len={})",
+        prior.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
+        last_seen
+    );
     Err(AppError::Validation(
         "no selection captured — highlight text in the source app first".into(),
     ))
@@ -120,7 +244,7 @@ fn position_near_cursor(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn begin(app: AppHandle) -> AppResult<()> {
+pub async fn begin(app: AppHandle, kind: RefineKind) -> AppResult<()> {
     let prior = app.clipboard().read_text().ok();
 
     let selection = match capture_selection(&app, &prior) {
@@ -144,6 +268,7 @@ pub async fn begin(app: AppHandle) -> AppResult<()> {
     *session.original_clipboard.lock().unwrap() = prior;
     *session.selection.lock().unwrap() = Some(selection.clone());
     *session.mode_id.lock().unwrap() = Some(active.id.clone());
+    *session.kind.lock().unwrap() = Some(kind);
 
     position_near_cursor(&app)?;
     let win = app
@@ -156,13 +281,27 @@ pub async fn begin(app: AppHandle) -> AppResult<()> {
 
     let seq = session.stream_seq.fetch_add(1, Ordering::SeqCst) + 1;
 
+    // For Grammar/Summarize the user-facing label is the action name, not the
+    // active mode. We still send modeId/modeName so the overlay can show the
+    // provider/model strip when it wants to. `kind` drives header text +
+    // button set on the React side.
+    let header_name = match kind {
+        RefineKind::Rewrite => active.name.clone(),
+        other => other.label().to_string(),
+    };
+    let header_icon = match kind {
+        RefineKind::Rewrite => active.icon_name.clone(),
+        other => Some(other.icon().to_string()),
+    };
+
     let _ = app.emit(
         "refine:reset",
         serde_json::json!({
             "selection": selection,
+            "kind": kind,
             "modeId": active.id,
-            "modeName": active.name,
-            "iconName": active.icon_name,
+            "modeName": header_name,
+            "iconName": header_icon,
         }),
     );
 
@@ -170,7 +309,7 @@ pub async fn begin(app: AppHandle) -> AppResult<()> {
     let mode_id = active.id.clone();
     let sel = selection.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_stream(app_for_stream.clone(), mode_id, sel, seq).await {
+        if let Err(e) = run_stream(app_for_stream.clone(), kind, mode_id, sel, seq).await {
             if is_current_stream(&app_for_stream, seq) {
                 let _ = app_for_stream.emit("refine:error", e.to_string());
             }
@@ -186,7 +325,13 @@ fn is_current_stream(app: &AppHandle, seq: u64) -> bool {
         .unwrap_or(false)
 }
 
-async fn run_stream(app: AppHandle, mode_id: String, selection: String, seq: u64) -> AppResult<()> {
+async fn run_stream(
+    app: AppHandle,
+    kind: RefineKind,
+    mode_id: String,
+    selection: String,
+    seq: u64,
+) -> AppResult<()> {
     let state = app
         .try_state::<crate::app::state::AppState>()
         .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
@@ -197,6 +342,14 @@ async fn run_stream(app: AppHandle, mode_id: String, selection: String, seq: u64
         .find(|m| m.id == mode_id)
         .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
         .clone();
+
+    // Grammar/Summarize override the mode's prompt with a built-in but keep
+    // its sampling + pinned provider — so the user's preferred model still
+    // serves the built-in actions. Rewrite uses the mode's prompt unchanged.
+    let system_prompt = kind
+        .builtin_prompt()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| mode.system_prompt.clone());
 
     let resolved = mode.provider_override.clone().filter(|s| !s.is_empty());
     let row = match resolved.as_deref() {
@@ -213,7 +366,7 @@ async fn run_stream(app: AppHandle, mode_id: String, selection: String, seq: u64
         model: None,
         temperature: Some(mode.temperature),
         max_tokens: Some(mode.max_tokens as u32),
-        system: Some(mode.system_prompt.clone()),
+        system: Some(system_prompt),
     };
 
     let cfg = state.connections.http_config().await;
@@ -281,13 +434,18 @@ pub async fn retry(app: AppHandle) -> AppResult<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| AppError::Validation("no active refine session".into()))?;
+    let kind = session
+        .kind
+        .lock()
+        .unwrap()
+        .unwrap_or(RefineKind::Rewrite);
 
     let seq = session.stream_seq.fetch_add(1, Ordering::SeqCst) + 1;
 
     let _ = app.emit("refine:reset_text", ());
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_stream(app2.clone(), mode_id, selection, seq).await {
+        if let Err(e) = run_stream(app2.clone(), kind, mode_id, selection, seq).await {
             if is_current_stream(&app2, seq) {
                 let _ = app2.emit("refine:error", e.to_string());
             }

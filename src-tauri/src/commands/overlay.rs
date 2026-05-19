@@ -118,9 +118,11 @@ pub async fn set_active_mode(app: AppHandle, id: String) -> AppResult<()> {
 
 /// Begin a refine session on demand from the frontend (debug / dashboard
 /// "Try refine on selection" button). Same code path as the global hotkey.
+/// The frontend triggers this for the generic "Rewrite" flow only — Grammar
+/// and Summarize are global-hotkey-driven.
 #[tauri::command]
 pub async fn refine_begin(app: AppHandle) -> AppResult<()> {
-    crate::overlay::begin(app).await
+    crate::overlay::begin(app, crate::overlay::RefineKind::Rewrite).await
 }
 
 #[tauri::command]

@@ -26,3 +26,4 @@ export {
   PhWindow,
   PanelHead,
 } from './SettingsLayout';
+export { WindowTitlebar } from './WindowTitlebar';

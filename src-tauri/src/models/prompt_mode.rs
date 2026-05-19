@@ -23,4 +23,13 @@ pub struct PromptMode {
     /// Comma-separated free-text tags. Empty string = untagged.
     #[serde(default)]
     pub tags: String,
+    /// Whether this mode appears in the tray menu, dashboard list, and the
+    /// `cycle_mode` rotation. Disabled modes are still stored so the user can
+    /// re-enable them later without losing their prompt + settings.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
