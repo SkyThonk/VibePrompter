@@ -179,6 +179,8 @@ impl ConnectionService {
             last_used_at: String::new(),
             notes: input.notes.clone(),
             tags: input.tags.clone(),
+            price_input_per_m: input.price_input_per_m,
+            price_output_per_m: input.price_output_per_m,
         };
 
         self.repo.upsert(&row).await?;
@@ -211,6 +213,8 @@ impl ConnectionService {
                     "extraHeaders": r.extra_headers,
                     "notes": r.notes,
                     "tags": r.tags,
+                    "priceInputPerM": r.price_input_per_m,
+                    "priceOutputPerM": r.price_output_per_m,
                 })
             })
             .collect();
@@ -297,6 +301,14 @@ impl ConnectionService {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
+                price_input_per_m: item
+                    .get("priceInputPerM")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                price_output_per_m: item
+                    .get("priceOutputPerM")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
             };
 
             if ConnectionKind::from_db(&row.kind).is_none() || row.base_url.is_empty() {
@@ -337,6 +349,53 @@ impl ConnectionService {
 
     pub async fn list_models(&self, id: &str) -> AppResult<Vec<String>> {
         let row = self.hydrate(self.repo.get(id).await?);
+        let cfg = self.http_config().await;
+        let _permit = self.permits.acquire().await.expect("semaphore closed");
+        providers::list_models(&row, &cfg).await
+    }
+
+    /// Fetch the model catalog for a connection that *hasn't been saved yet*.
+    /// Lets the New / Edit form populate its model picker before the user
+    /// commits the row — much friendlier than "save first, then come back to
+    /// pick a model." Builds an ephemeral `ConnectionRow` directly from the
+    /// draft input; nothing is persisted, no keyring write happens, the API
+    /// key passed in is used only for this one request and dropped.
+    pub async fn list_models_for_draft(&self, input: &ConnectionInput) -> AppResult<Vec<String>> {
+        let kind = ConnectionKind::from_db(&input.kind)
+            .ok_or_else(|| AppError::Validation(format!("unknown kind: {}", input.kind)))?;
+        let _ = kind; // unused locally; provider helper re-parses from `row.kind`
+        if input.base_url.trim().is_empty() {
+            return Err(AppError::Validation("base URL is required to fetch models".into()));
+        }
+        // If the draft has no inline api_key, fall back to the saved keyring
+        // entry for this id — covers the "Edit an existing connection,
+        // change the model" path where the user hasn't re-typed the key.
+        let api_key = if input.api_key.trim().is_empty() {
+            input
+                .id
+                .as_deref()
+                .and_then(|id| self.secrets.get(&connection_account(id)))
+                .unwrap_or_default()
+        } else {
+            input.api_key.trim().to_string()
+        };
+        let row = ConnectionRow {
+            id: input.id.clone().unwrap_or_else(|| "draft".to_string()),
+            label: input.label.trim().to_string(),
+            kind: input.kind.clone(),
+            base_url: input.base_url.trim().to_string(),
+            api_key,
+            default_model: input.default_model.trim().to_string(),
+            is_default: false,
+            extra_headers: input.extra_headers.trim().to_string(),
+            last_used_at: String::new(),
+            notes: String::new(),
+            tags: String::new(),
+            // list_models doesn't care about pricing — but the row needs
+            // valid fields, so default to 0 (= fall back to embedded table).
+            price_input_per_m: 0.0,
+            price_output_per_m: 0.0,
+        };
         let cfg = self.http_config().await;
         let _permit = self.permits.acquire().await.expect("semaphore closed");
         providers::list_models(&row, &cfg).await
@@ -477,6 +536,8 @@ fn redact(row: ConnectionRow) -> ConnectionInfo {
         last_used_at: row.last_used_at,
         notes: row.notes,
         tags: row.tags,
+        price_input_per_m: row.price_input_per_m,
+        price_output_per_m: row.price_output_per_m,
     }
 }
 

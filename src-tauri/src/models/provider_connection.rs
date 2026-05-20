@@ -53,6 +53,12 @@ pub struct ConnectionInfo {
     /// Comma-separated free-text tags (e.g. "work,personal,gpt"). Used by
     /// the Providers panel to filter / group the connection list.
     pub tags: String,
+    /// USD per million input tokens. 0 = fall back to embedded pricing table.
+    #[serde(rename = "priceInputPerM")]
+    pub price_input_per_m: f64,
+    /// USD per million output tokens. 0 = fall back to embedded pricing table.
+    #[serde(rename = "priceOutputPerM")]
+    pub price_output_per_m: f64,
 }
 
 /// Write DTO from the frontend. `apiKey` is optional on update — when absent
@@ -79,6 +85,10 @@ pub struct ConnectionInput {
     pub notes: String,
     #[serde(default)]
     pub tags: String,
+    #[serde(default)]
+    pub price_input_per_m: f64,
+    #[serde(default)]
+    pub price_output_per_m: f64,
 }
 
 /// A single message in a chat completion request — identical shape for both

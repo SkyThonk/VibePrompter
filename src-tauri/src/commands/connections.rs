@@ -67,6 +67,18 @@ pub async fn list_connection_models(
     state.connections.list_models(&id).await
 }
 
+/// Fetch the model catalog from a connection that isn't saved yet. Used
+/// by the connection editor's "Fetch models" button so users can browse
+/// available models before committing — no need to save, come back, and
+/// fetch.
+#[tauri::command]
+pub async fn list_models_for_draft(
+    state: State<'_, AppState>,
+    input: crate::models::ConnectionInput,
+) -> Result<Vec<String>, AppError> {
+    state.connections.list_models_for_draft(&input).await
+}
+
 #[tauri::command]
 pub async fn complete(
     state: State<'_, AppState>,
@@ -207,6 +219,8 @@ pub async fn run_prompt_stream(
                 &r.model,
                 r.usage.input_tokens as i64,
                 r.usage.output_tokens as i64,
+                row.price_input_per_m,
+                row.price_output_per_m,
             );
             let _ = state
                 .history

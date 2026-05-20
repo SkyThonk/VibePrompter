@@ -76,17 +76,6 @@
       "nsis": {
         "installerHooks": "installer/hooks.nsh"
       }
-    },
-    "createUpdaterArtifacts": true
-  },
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": [
-        "https://releases.vibeprompter.app/{{target}}/{{arch}}/{{current_version}}"
-      ],
-      "dialog": true,
-      "pubkey": "PASTE_PUBLIC_KEY_HERE"
     }
   }
 }

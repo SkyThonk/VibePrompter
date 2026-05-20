@@ -82,15 +82,26 @@ impl PromptService {
         // Best-effort history insert — the user still gets the response even
         // if history write fails (e.g. disk full). The error is logged for
         // diagnostics rather than propagated.
+        let all_conns = self.connections.list().await.unwrap_or_default();
         let provider_label = describe_connection(
-            self.connections.list().await.unwrap_or_default(),
+            all_conns.clone(),
             resolved_conn_id.as_deref(),
             &result.model,
         );
+        // Look up the resolved connection's pricing overrides; fall back to
+        // 0/0 (= use the embedded table) when no connection was resolved or
+        // the row carries no override.
+        let (price_in, price_out) = resolved_conn_id
+            .as_deref()
+            .and_then(|id| all_conns.iter().find(|c| c.id == id))
+            .map(|c| (c.price_input_per_m, c.price_output_per_m))
+            .unwrap_or((0.0, 0.0));
         let cost_micros = crate::services::pricing::cost_micros(
             &result.model,
             result.usage.input_tokens as i64,
             result.usage.output_tokens as i64,
+            price_in,
+            price_out,
         );
         if let Err(e) = self
             .history
@@ -189,6 +200,8 @@ pub async fn run_with_row(
         &result.model,
         result.usage.input_tokens as i64,
         result.usage.output_tokens as i64,
+        row.price_input_per_m,
+        row.price_output_per_m,
     );
     let _ = history
         .record(NewHistoryItem {

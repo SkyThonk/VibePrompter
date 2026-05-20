@@ -27,7 +27,7 @@ function StepDot({ n, label, active, done }: Step) {
         className="w-[18px] h-[18px] rounded-full border-[0.5px] flex items-center justify-center text-[10.5px] font-semibold"
         style={{
           background: done ? 'var(--accent)' : active ? 'var(--accent-tint-2)' : 'var(--surface-2)',
-          color: done ? '#1a0f2e' : active ? 'var(--accent)' : 'var(--fg-mute)',
+          color: done ? '#ffffff' : active ? 'var(--accent)' : 'var(--fg-mute)',
           borderColor: active ? 'var(--accent)' : 'var(--border-strong)',
         }}
       >

@@ -131,6 +131,8 @@ fn dispatch(app: &AppHandle, action: &str) {
 
 fn show_error_hud(app: &AppHandle, msg: &str) {
     // Surface a single-line summary; the full error is in the logs.
+    // Marked `critical` so it shows even when the user has notifications
+    // disabled — a hotkey that silently fails reads as a broken app.
     let preview = msg.chars().take(80).collect::<String>();
     let _ = crate::commands::overlay::show_mode_hud_internal(
         app.clone(),
@@ -139,13 +141,17 @@ fn show_error_hud(app: &AppHandle, msg: &str) {
             mode_name: preview,
             icon_name: Some("info".into()),
             kicker: Some("Prompt failed".into()),
+            critical: true,
         },
     );
 }
 
 /// Friendly HUD for the "user pressed the hotkey but didn't select anything"
 /// case. Common enough on first-run that a raw error preview reads as a bug;
-/// a clear instruction tells the user what to do next.
+/// a clear instruction tells the user what to do next. Marked `critical`
+/// so it bypasses the notifications-off mute — the user pressed a hotkey
+/// expecting an action; them not getting any feedback at all would be worse
+/// than them getting feedback they didn't ask for.
 fn show_no_selection_hud(app: &AppHandle) {
     let _ = crate::commands::overlay::show_mode_hud_internal(
         app.clone(),
@@ -154,6 +160,7 @@ fn show_no_selection_hud(app: &AppHandle) {
             mode_name: "Select some text first, then press the hotkey".into(),
             icon_name: Some("text".into()),
             kicker: Some("Nothing highlighted".into()),
+            critical: true,
         },
     );
 }

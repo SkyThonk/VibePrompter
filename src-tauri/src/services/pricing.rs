@@ -37,7 +37,10 @@ pub fn lookup(model_id: &str) -> Option<(f64, f64)> {
         ("claude-3-5-sonnet",  3.00, 15.00),
         ("claude-3-5-haiku",   0.80,  4.00),
         ("claude-3-opus",     15.00, 75.00),
-        // Gemini (via OpenAI-compat endpoint, ids include "gemini-")
+        // Gemini (via OpenAI-compat endpoint, ids include "gemini-").
+        // More-specific keys listed first so "gemini-flash-lite-latest"
+        // doesn't get hijacked by the broader "gemini-2.5-flash" match.
+        ("gemini-flash-lite", 0.10,  0.40),
         ("gemini-2.5-pro",     1.25,  5.00),
         ("gemini-2.5-flash",   0.15,  0.60),
         ("gemini-2.0-flash",   0.10,  0.40),
@@ -74,18 +77,41 @@ pub fn lookup(model_id: &str) -> Option<(f64, f64)> {
 }
 
 /// Compute cost in micro-dollars (1 USD = 1_000_000 micros) for a given run.
-/// Returns 0 when the model is unrecognized or token counts are zero — the
-/// caller stores 0 to mean "unknown" and the UI renders a placeholder.
-pub fn cost_micros(model_id: &str, input_tokens: i64, output_tokens: i64) -> i64 {
-    let Some((in_per_m, out_per_m)) = lookup(model_id) else {
-        return 0;
-    };
+/// Returns 0 when no price is known and token counts are zero — the caller
+/// stores 0 to mean "unknown" and the UI renders a placeholder.
+///
+/// Per-connection override semantics: pass non-zero values in
+/// `override_in_per_m` / `override_out_per_m` and they win over the
+/// embedded table. A zero override means "fall back to the table." This
+/// makes the column default of 0.0 in `provider_connections` behave
+/// correctly without bespoke null-handling at every call site.
+pub fn cost_micros(
+    model_id: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    override_in_per_m: f64,
+    override_out_per_m: f64,
+) -> i64 {
     if input_tokens <= 0 && output_tokens <= 0 {
         return 0;
     }
-    // micro-USD = tokens / 1_000_000 × price_per_million × 1_000_000
-    //           = tokens × price_per_million
-    // Round to nearest micro to avoid drift on very small runs.
+    // Pull the table entry once; the override path may want only one
+    // direction (e.g. user sets input price but leaves output to fall
+    // back). Independent per-direction fallback keeps that case sane.
+    let table = lookup(model_id);
+    let in_per_m = if override_in_per_m > 0.0 {
+        override_in_per_m
+    } else {
+        table.map(|(i, _)| i).unwrap_or(0.0)
+    };
+    let out_per_m = if override_out_per_m > 0.0 {
+        override_out_per_m
+    } else {
+        table.map(|(_, o)| o).unwrap_or(0.0)
+    };
+    if in_per_m == 0.0 && out_per_m == 0.0 {
+        return 0;
+    }
     let micros = (input_tokens as f64) * in_per_m + (output_tokens as f64) * out_per_m;
     micros.round() as i64
 }
@@ -111,17 +137,38 @@ mod tests {
     #[test]
     fn cost_is_sum_of_input_and_output_priced() {
         // 1M input @ $0.15/M + 1M output @ $0.60/M = $0.75 = 750_000 micros
-        let c = cost_micros("gpt-5-mini", 1_000_000, 1_000_000);
+        let c = cost_micros("gpt-5-mini", 1_000_000, 1_000_000, 0.0, 0.0);
         assert_eq!(c, 750_000);
     }
 
     #[test]
     fn cost_zero_for_unknown_model() {
-        assert_eq!(cost_micros("llama3.3", 1000, 1000), 0);
+        assert_eq!(cost_micros("llama3.3", 1000, 1000, 0.0, 0.0), 0);
     }
 
     #[test]
     fn cost_zero_for_no_tokens() {
-        assert_eq!(cost_micros("gpt-5-mini", 0, 0), 0);
+        assert_eq!(cost_micros("gpt-5-mini", 0, 0, 0.0, 0.0), 0);
+    }
+
+    #[test]
+    fn override_takes_precedence_over_table() {
+        // table entry would be $0.15/M + $0.60/M; we pass $1/M / $5/M
+        let c = cost_micros("gpt-5-mini", 1_000_000, 1_000_000, 1.0, 5.0);
+        assert_eq!(c, 6_000_000); // $6 total
+    }
+
+    #[test]
+    fn override_falls_back_per_direction() {
+        // input override set, output falls back to table ($0.60/M)
+        let c = cost_micros("gpt-5-mini", 1_000_000, 1_000_000, 1.0, 0.0);
+        assert_eq!(c, 1_000_000 + 600_000); // $1 + $0.60 = $1.60
+    }
+
+    #[test]
+    fn override_works_for_unknown_model() {
+        // even with no table entry, explicit override prices a run
+        let c = cost_micros("custom-internal-model", 1_000_000, 500_000, 2.0, 8.0);
+        assert_eq!(c, 2_000_000 + 4_000_000); // $2 + $4
     }
 }

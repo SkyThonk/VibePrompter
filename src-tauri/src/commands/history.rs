@@ -56,6 +56,57 @@ pub struct CostSummary {
     pub month_runs_unpriced: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CostByDay {
+    pub day: String,
+    #[serde(rename = "micros")]
+    pub micros: i64,
+    pub runs: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CostByConnection {
+    pub label: String,
+    pub micros: i64,
+    pub runs: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CostBreakdown {
+    #[serde(rename = "byDay")]
+    pub by_day: Vec<CostByDay>,
+    #[serde(rename = "byConnection")]
+    pub by_connection: Vec<CostByConnection>,
+    pub days: i64,
+}
+
+#[tauri::command]
+pub async fn get_cost_breakdown(
+    state: State<'_, AppState>,
+    days: Option<i64>,
+) -> Result<CostBreakdown, AppError> {
+    let days = days.unwrap_or(30).clamp(1, 365);
+    let by_day = state
+        .history
+        .cost_by_day(days)
+        .await?
+        .into_iter()
+        .map(|(day, micros, runs)| CostByDay { day, micros, runs })
+        .collect();
+    let by_connection = state
+        .history
+        .cost_by_connection(days)
+        .await?
+        .into_iter()
+        .map(|(label, micros, runs)| CostByConnection { label, micros, runs })
+        .collect();
+    Ok(CostBreakdown {
+        by_day,
+        by_connection,
+        days,
+    })
+}
+
 #[tauri::command]
 pub async fn get_cost_summary(
     state: State<'_, AppState>,

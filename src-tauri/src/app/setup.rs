@@ -333,6 +333,7 @@ fn show_tray_hint_once(app: &AppHandle) {
                 mode_name: "VibePrompter".into(),
                 icon_name: Some("bell".into()),
                 kicker: Some("Still running in tray".into()),
+                critical: false, // soft hint — respects notifications setting
             },
         );
     });

@@ -28,6 +28,8 @@ interface Connection {
   lastUsedAt: string;
   notes: string;
   tags: string;
+  priceInputPerM: number;
+  priceOutputPerM: number;
 }
 
 interface ConnectionDraft {
@@ -41,6 +43,8 @@ interface ConnectionDraft {
   extraHeaders: string;
   notes: string;
   tags: string;
+  priceInputPerM: number;
+  priceOutputPerM: number;
 }
 
 const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' | 'anthropic'; model: string }> = {
@@ -51,7 +55,7 @@ const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' |
   mistral:    { label: 'Mistral',      baseUrl: 'https://api.mistral.ai/v1',                              kind: 'openai',    model: 'mistral-large-latest' },
   deepseek:   { label: 'DeepSeek',     baseUrl: 'https://api.deepseek.com/v1',                            kind: 'openai',    model: 'deepseek-chat' },
   together:   { label: 'Together',     baseUrl: 'https://api.together.xyz/v1',                            kind: 'openai',    model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
-  gemini:     { label: 'Gemini',       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    model: 'gemini-2.5-flash' },
+  gemini:     { label: 'Gemini',       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    model: 'gemini-flash-lite-latest' },
   xai:        { label: 'xAI (Grok)',   baseUrl: 'https://api.x.ai/v1',                                    kind: 'openai',    model: 'grok-4' },
   ollama:     { label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1',                            kind: 'openai',    model: 'llama3.3' },
   lmstudio:   { label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',                          kind: 'openai',    model: '' },
@@ -68,6 +72,8 @@ const emptyDraft = (): ConnectionDraft => ({
   extraHeaders: '',
   notes: '',
   tags: '',
+  priceInputPerM: 0,
+  priceOutputPerM: 0,
 });
 
 export function ProvidersPanel() {
@@ -207,14 +213,26 @@ export function ProvidersPanel() {
   };
 
   const fetchModels = async () => {
-    if (!draft?.id) {
-      setFeedback({ kind: 'err', msg: 'Save the connection first, then fetch models.' });
+    if (!draft) return;
+    if (!draft.baseUrl.trim()) {
+      setFeedback({ kind: 'err', msg: 'Set a base URL before fetching models.' });
+      return;
+    }
+    // Editing an existing connection with no inline key re-uses the saved
+    // keyring entry on the backend side, so we only require a key for
+    // brand-new drafts.
+    if (!draft.id && !draft.apiKey.trim() && !draft.baseUrl.includes('localhost')) {
+      setFeedback({ kind: 'err', msg: 'Paste your API key first — the vendor needs it to list models.' });
       return;
     }
     setBusy('models');
     setFeedback(null);
     try {
-      const list = await invokeCommand<string[]>('list_connection_models', { id: draft.id });
+      // Pass the current draft directly so the user doesn't have to save
+      // before browsing models. Backend builds an ephemeral connection,
+      // makes the request, and discards. Nothing is persisted by this
+      // call — Save still has to happen separately.
+      const list = await invokeCommand<string[]>('list_models_for_draft', { input: draft });
       setModels(list);
       if (list.length === 0) {
         setFeedback({ kind: 'err', msg: 'Vendor returned no models.' });
@@ -285,13 +303,23 @@ export function ProvidersPanel() {
       extraHeaders: c.extraHeaders ?? '',
       notes: c.notes ?? '',
       tags: c.tags ?? '',
+      priceInputPerM: c.priceInputPerM ?? 0,
+      priceOutputPerM: c.priceOutputPerM ?? 0,
     });
     setModels([]);
     setKeyVisible(false);
     setFeedback(null);
     // Auto-open the Advanced section when editing a row that already has
-    // headers or notes — otherwise the user thinks their data is missing.
-    setAdvancedOpen(Boolean(c.extraHeaders?.trim() || c.notes?.trim()));
+    // headers, notes, or a pricing override — otherwise the user thinks
+    // their data is missing.
+    setAdvancedOpen(
+      Boolean(
+        c.extraHeaders?.trim() ||
+          c.notes?.trim() ||
+          (c.priceInputPerM ?? 0) > 0 ||
+          (c.priceOutputPerM ?? 0) > 0
+      )
+    );
   };
 
   const presetEntries = useMemo(() => Object.entries(PRESETS), []);
@@ -675,7 +703,7 @@ export function ProvidersPanel() {
                   variant="ghost"
                   onClick={fetchModels}
                   disabled={busy === 'models'}
-                  title="Ask the vendor for its current model list (requires saving first)"
+                  title="Ask the vendor for its current model list — works before saving so you can pick a model from the live catalog."
                 >
                   {busy === 'models' ? 'Fetching…' : 'Fetch models'}
                 </PhButton>
@@ -748,7 +776,7 @@ export function ProvidersPanel() {
                 {advancedOpen ? '− hide' : '+ show'}
               </span>
               <span className="text-[11px]" style={{ color: 'var(--fg-dim)' }}>
-                Custom headers · notes
+                Custom headers · pricing · notes
               </span>
             </button>
 
@@ -778,6 +806,48 @@ export function ProvidersPanel() {
                       Must be a JSON object with string values.
                     </span>
                   )}
+                </Field>
+
+                <Field label="Pricing override (USD per 1M tokens)">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11.5px] text-fg-dim w-12">Input</span>
+                      <PhInput
+                        mono
+                        type="number"
+                        value={String(draft.priceInputPerM)}
+                        onChange={(v) => {
+                          const n = Number(v);
+                          setDraft({
+                            ...draft,
+                            priceInputPerM: Number.isFinite(n) && n >= 0 ? n : 0,
+                          });
+                        }}
+                        placeholder="0.15"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11.5px] text-fg-dim w-12">Output</span>
+                      <PhInput
+                        mono
+                        type="number"
+                        value={String(draft.priceOutputPerM)}
+                        onChange={(v) => {
+                          const n = Number(v);
+                          setDraft({
+                            ...draft,
+                            priceOutputPerM: Number.isFinite(n) && n >= 0 ? n : 0,
+                          });
+                        }}
+                        placeholder="0.60"
+                      />
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-fg-dim mt-1">
+                    Set non-zero values to override the embedded pricing table for this connection.
+                    Leave at 0 to use the app's best-known prices for the model the vendor reports.
+                    Useful for models the embedded table doesn't know yet, or for negotiated rates.
+                  </span>
                 </Field>
 
                 <Field label="Notes (optional)">

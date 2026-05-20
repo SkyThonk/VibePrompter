@@ -89,20 +89,34 @@ export function RefineOverlay() {
     invoke<typeof conns>('list_connections').then(setConns).catch(() => setConns([]));
   }, []);
 
-  // Apply backend theme + accent so this window matches the rest of the app.
+  // Apply backend theme + accent so this window matches the rest of the
+  // app. Fetched once on mount and refreshed whenever the main window
+  // emits `settings_changed` — without that subscription, changing accent
+  // in Appearance would only take effect after the overlay window was
+  // re-created (i.e. app restart).
   useEffect(() => {
-    invoke<{ theme?: string; accent?: string }>('get_settings')
-      .then((s) => {
-        const html = document.documentElement;
-        if (s.theme === 'light' || s.theme === 'dark') {
-          html.setAttribute('data-theme', s.theme);
-        } else if (s.theme === 'system') {
-          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-        }
-        if (s.accent) html.setAttribute('data-accent', s.accent);
-      })
-      .catch(() => {});
+    const applySettings = (s: { theme?: string; accent?: string }) => {
+      const html = document.documentElement;
+      if (s.theme === 'light' || s.theme === 'dark') {
+        html.setAttribute('data-theme', s.theme);
+      } else if (s.theme === 'system') {
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+      }
+      if (s.accent) html.setAttribute('data-accent', s.accent);
+    };
+    const reload = () =>
+      invoke<{ theme?: string; accent?: string }>('get_settings')
+        .then(applySettings)
+        .catch(() => {});
+    reload();
+    let unlisten: (() => void) | null = null;
+    listen('settings_changed', () => reload()).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {

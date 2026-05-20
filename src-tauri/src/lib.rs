@@ -1,5 +1,9 @@
 //! VibePrompter backend library crate.
 
+// `Manager` brings `get_webview_window`, `state`, `try_state`, etc. into
+// scope on `App` / `AppHandle`. We use it in the setup hook below.
+use tauri::Manager;
+
 mod app;
 mod commands;
 mod config;
@@ -44,10 +48,6 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        // Updater. Reads the public key from tauri.conf.json `plugins.updater.pubkey`
-        // at compile time; the matching private key signs release artifacts during
-        // `tauri build`. Frontend can trigger checks via the updater JS API.
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Persist window size/position across launches so the user's layout
         // sticks. Skips the `mode-hud` window — that's transparent, sized
         // by config, and re-centered on every show.
@@ -104,6 +104,7 @@ pub fn run() {
             commands::count_history,
             commands::set_history_favorite,
             commands::get_cost_summary,
+            commands::get_cost_breakdown,
             commands::export_connections,
             commands::import_connections,
             commands::list_shortcuts,
@@ -121,6 +122,7 @@ pub fn run() {
             commands::set_default_connection,
             commands::test_connection,
             commands::list_connection_models,
+            commands::list_models_for_draft,
             commands::complete,
             commands::complete_default,
             commands::run_prompt,

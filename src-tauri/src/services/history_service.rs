@@ -44,6 +44,20 @@ impl HistoryService {
         self.repo.cost_summary(&month_ago, &week_ago).await
     }
 
+    /// Per-day cost totals over the trailing N days. Used by the dashboard
+    /// cost-trend chart.
+    pub async fn cost_by_day(&self, days: i64) -> AppResult<Vec<(String, i64, i64)>> {
+        let since = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        self.repo.cost_by_day(&since).await
+    }
+
+    /// Per-connection cost breakdown over the trailing N days. Used by the
+    /// dashboard cost card to show which connection drives spend.
+    pub async fn cost_by_connection(&self, days: i64) -> AppResult<Vec<(String, i64, i64)>> {
+        let since = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        self.repo.cost_by_connection(&since).await
+    }
+
     /// Record a completed transformation. Used by sub-project 2.
     #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {

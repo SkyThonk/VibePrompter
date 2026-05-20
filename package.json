@@ -18,7 +18,6 @@
     "@tanstack/react-query": "^5.64.0",
     "@tanstack/react-query-devtools": "^5.64.0",
     "@tauri-apps/api": "^2.11.0",
-    "@tauri-apps/plugin-updater": "^2.10.1",
     "axios": "^1.7.9",
     "axios-retry": "^4.5.0",
     "clsx": "^2.1.1",

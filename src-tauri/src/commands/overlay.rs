@@ -18,26 +18,37 @@ pub struct ModeHudArgs {
     /// HUD for one-off notifications (e.g. "Still running in tray").
     #[serde(default)]
     pub kicker: Option<String>,
+    /// When true, the HUD shows regardless of the user's notifications
+    /// preference. Reserved for *critical* feedback the user cannot act
+    /// on without — e.g. "Nothing highlighted" after a hotkey press,
+    /// "Prompt failed" after a vendor error. Without this escape hatch,
+    /// disabling notifications would silently break the hotkeys for any
+    /// user who can't figure out why nothing happens.
+    #[serde(default)]
+    pub critical: bool,
 }
 
 /// Internal implementation — callable from any backend code path.
 /// The `#[tauri::command]` wrapper below just forwards to this.
 pub fn show_mode_hud_internal(app: AppHandle, args: ModeHudArgs) -> AppResult<()> {
-    // Respect the user's notifications preference. The mode-switch HUD is a
-    // soft notification — same category as a toast — so silencing should
-    // silence this too. On read failure we default to showing, matching the
-    // settings field's own `default = true`.
-    let notifications_on = app
-        .try_state::<crate::app::state::AppState>()
-        .and_then(|state| {
-            let svc = state.settings.clone();
-            tauri::async_runtime::block_on(svc.get()).ok()
-        })
-        .map(|s| s.notifications)
-        .unwrap_or(true);
-    if !notifications_on {
-        tracing::debug!("mode HUD suppressed: notifications disabled");
-        return Ok(());
+    // Respect the user's notifications preference for SOFT messages (mode
+    // switches, "Still running in tray" hint, etc.). Critical feedback —
+    // marked with `args.critical = true` by the caller — bypasses this so
+    // hotkey errors never silently vanish. On read failure we default to
+    // showing, matching the settings field's own `default = true`.
+    if !args.critical {
+        let notifications_on = app
+            .try_state::<crate::app::state::AppState>()
+            .and_then(|state| {
+                let svc = state.settings.clone();
+                tauri::async_runtime::block_on(svc.get()).ok()
+            })
+            .map(|s| s.notifications)
+            .unwrap_or(true);
+        if !notifications_on {
+            tracing::debug!("mode HUD suppressed: notifications disabled");
+            return Ok(());
+        }
     }
 
     let window = app

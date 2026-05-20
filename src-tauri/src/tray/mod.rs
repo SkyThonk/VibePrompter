@@ -419,6 +419,7 @@ fn apply_active_mode(app: &AppHandle, next: TrayMode) -> AppResult<()> {
             mode_name: next.name,
             icon_name: next.icon_name,
             kicker: None,
+            critical: false, // mode switch is soft — respects user setting
         },
     )
 }

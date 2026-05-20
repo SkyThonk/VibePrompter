@@ -30,6 +30,14 @@ pub struct ConnectionRow {
     /// Comma-separated free-text tags ("work,personal,gpt"). Empty string
     /// when untagged. Used by the Providers panel to group / filter the list.
     pub tags: String,
+    /// USD per million input tokens. `0.0` means "use the embedded pricing
+    /// table from services/pricing.rs" (falls back to that lookup, which
+    /// may itself return 0 for unknown models). When non-zero, takes
+    /// precedence over the embedded table for any run on this connection.
+    pub price_input_per_m: f64,
+    /// USD per million output tokens. Same fallback semantics as
+    /// `price_input_per_m`.
+    pub price_output_per_m: f64,
 }
 
 #[derive(Clone)]
@@ -43,9 +51,9 @@ impl ConnectionRepo {
     }
 
     pub async fn list(&self) -> AppResult<Vec<ConnectionRow>> {
-        let rows: Vec<(String, String, String, String, String, String, bool, String, String, String, String)> =
+        let rows: Vec<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
                  FROM provider_connections
                  ORDER BY is_default DESC, last_used_at DESC, created_at ASC",
             )
@@ -53,7 +61,7 @@ impl ConnectionRepo {
             .await?;
         Ok(rows
             .into_iter()
-            .map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags)| ConnectionRow {
+            .map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| ConnectionRow {
                 id,
                 label,
                 kind,
@@ -65,20 +73,22 @@ impl ConnectionRepo {
                 last_used_at,
                 notes,
                 tags,
+                price_input_per_m,
+                price_output_per_m,
             })
             .collect())
     }
 
     pub async fn get(&self, id: &str) -> AppResult<ConnectionRow> {
-        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String)> =
+        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
                  FROM provider_connections WHERE id = ?1",
             )
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
-        row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags)| ConnectionRow {
+        row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| ConnectionRow {
             id,
             label,
             kind,
@@ -90,6 +100,8 @@ impl ConnectionRepo {
             last_used_at,
             notes,
             tags,
+            price_input_per_m,
+            price_output_per_m,
         })
         .ok_or_else(|| AppError::NotFound { entity: "provider_connection", id: id.to_string() })
     }
@@ -102,12 +114,15 @@ impl ConnectionRepo {
         sqlx::query(
             "INSERT INTO provider_connections
                (id, label, kind, base_url, api_key, default_model, is_default,
-                extra_headers, notes, tags, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+                extra_headers, notes, tags, price_input_per_m, price_output_per_m,
+                created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
              ON CONFLICT(id) DO UPDATE SET
                label = ?2, kind = ?3, base_url = ?4, api_key = ?5,
                default_model = ?6, is_default = ?7, extra_headers = ?8,
-               notes = ?9, tags = ?10, updated_at = ?11",
+               notes = ?9, tags = ?10,
+               price_input_per_m = ?11, price_output_per_m = ?12,
+               updated_at = ?13",
         )
         .bind(&row.id)
         .bind(&row.label)
@@ -119,6 +134,8 @@ impl ConnectionRepo {
         .bind(&row.extra_headers)
         .bind(&row.notes)
         .bind(&row.tags)
+        .bind(row.price_input_per_m)
+        .bind(row.price_output_per_m)
         .bind(now)
         .execute(&self.pool)
         .await?;
@@ -157,14 +174,14 @@ impl ConnectionRepo {
     }
 
     pub async fn get_default(&self) -> AppResult<Option<ConnectionRow>> {
-        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String)> =
+        let row: Option<(String, String, String, String, String, String, bool, String, String, String, String, f64, f64)> =
             sqlx::query_as(
-                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags
+                "SELECT id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m
                  FROM provider_connections WHERE is_default = 1 LIMIT 1",
             )
             .fetch_optional(&self.pool)
             .await?;
-        Ok(row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags)| {
+        Ok(row.map(|(id, label, kind, base_url, api_key, default_model, is_default, extra_headers, last_used_at, notes, tags, price_input_per_m, price_output_per_m)| {
             ConnectionRow {
                 id,
                 label,
@@ -177,6 +194,8 @@ impl ConnectionRepo {
                 last_used_at,
                 notes,
                 tags,
+                price_input_per_m,
+                price_output_per_m,
             }
         }))
     }

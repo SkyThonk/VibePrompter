@@ -422,6 +422,9 @@ async fn run_stream(
                 ),
                 icon_name: Some("info".into()),
                 kicker: Some("Large selection".into()),
+                // Critical — large selection may quietly truncate or rate-
+                // limit. Better the user knows even with notifications off.
+                critical: true,
             },
         );
     }
@@ -484,12 +487,24 @@ async fn run_stream(
         &result.model,
         result.usage.input_tokens as i64,
         result.usage.output_tokens as i64,
+        row.price_input_per_m,
+        row.price_output_per_m,
     );
+    // For Grammar / Summarize hotkeys, the *prompt* is the built-in one
+    // regardless of which user-rewrite mode happens to be active. The
+    // history row should reflect the action the user actually invoked,
+    // not the currently-selected rewrite mode (which only governs the
+    // Ctrl+Alt+Space hotkey). Use the kind's display label + icon for
+    // those two cases; only plain Rewrite inherits the active mode.
+    let (history_mode_name, history_icon) = match kind {
+        RefineKind::Rewrite => (mode.name.clone(), mode.icon_name.clone()),
+        other => (other.label().to_string(), other.icon().to_string()),
+    };
     let _ = state
         .history
         .record(crate::models::NewHistoryItem {
-            mode_name: mode.name,
-            icon_name: mode.icon_name,
+            mode_name: history_mode_name,
+            icon_name: history_icon,
             provider_label: format!("{} · {}", row.label, result.model),
             source_text: selection,
             output_text: result.text.clone(),
@@ -673,18 +688,34 @@ async fn run_followup_stream(
         &result.model,
         result.usage.input_tokens as i64,
         result.usage.output_tokens as i64,
+        row.price_input_per_m,
+        row.price_output_per_m,
     );
     // Record the followup as its own history row. We keep the original
     // selection as `source_text` (so the row is still useful as "what did I
     // refine?") but prepend the user's instruction so the conversation is
     // reconstructable from history alone. Mode name carries a `· tweak`
     // suffix so the user can spot follow-ups vs initial runs at a glance.
+    //
+    // Same kind-aware fix as `run_stream`: Grammar / Summarize follow-ups
+    // are tagged with the action the user actually performed, not the
+    // active rewrite mode they happen to have selected.
+    let (history_mode_name, history_icon) = match kind {
+        RefineKind::Rewrite => (
+            format!("{} · tweak", mode.name),
+            mode.icon_name.clone(),
+        ),
+        other => (
+            format!("{} · tweak", other.label()),
+            other.icon().to_string(),
+        ),
+    };
     let combined_source = format!("[Tweak: {instruction}]\n\n{selection}");
     let _ = state
         .history
         .record(crate::models::NewHistoryItem {
-            mode_name: format!("{} · tweak", mode.name),
-            icon_name: mode.icon_name,
+            mode_name: history_mode_name,
+            icon_name: history_icon,
             provider_label: format!("{} · {}", row.label, result.model),
             source_text: combined_source,
             output_text: result.text.clone(),

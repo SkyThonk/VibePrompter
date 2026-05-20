@@ -33,7 +33,7 @@ const PRESETS: Preset[] = [
   { id: 'mistral',    label: 'Mistral',         baseUrl: 'https://api.mistral.ai/v1',                              kind: 'openai',    defaultModel: 'mistral-large-latest',                    keyHint: 'API key' },
   { id: 'deepseek',   label: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/v1',                            kind: 'openai',    defaultModel: 'deepseek-chat',                           keyHint: 'API key' },
   { id: 'together',   label: 'Together',        baseUrl: 'https://api.together.xyz/v1',                            kind: 'openai',    defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', keyHint: 'API key' },
-  { id: 'gemini',     label: 'Gemini',          baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    defaultModel: 'gemini-2.5-flash',                        keyHint: 'AIza…' },
+  { id: 'gemini',     label: 'Gemini',          baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai',    defaultModel: 'gemini-flash-lite-latest',                keyHint: 'AIza…' },
   { id: 'xai',        label: 'xAI (Grok)',      baseUrl: 'https://api.x.ai/v1',                                    kind: 'openai',    defaultModel: 'grok-4',                                  keyHint: 'API key' },
   { id: 'ollama',     label: 'Ollama (local)',  baseUrl: 'http://localhost:11434/v1',                              kind: 'openai',    defaultModel: 'llama3.3',                                keyHint: '(none — local server)' },
   { id: 'lmstudio',   label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1',                             kind: 'openai',    defaultModel: '',                                        keyHint: '(none — local server)' },

@@ -84,6 +84,60 @@ impl HistoryRepo {
         Ok(affected)
     }
 
+    /// Per-day cost totals over the trailing window. Returns rows of
+    /// `(yyyy-mm-dd UTC, micros, run_count)` ordered oldest-first so the
+    /// frontend can render a left-to-right bar chart without resorting.
+    /// Days with zero activity in the window are NOT in the result — the
+    /// frontend is responsible for filling gaps (clearer than dumping a
+    /// dense vector of mostly-zero rows across the wire).
+    pub async fn cost_by_day(
+        &self,
+        since_rfc3339: &str,
+    ) -> AppResult<Vec<(String, i64, i64)>> {
+        let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT substr(created_at, 1, 10) AS day,
+                    COALESCE(SUM(cost_micros), 0) AS micros,
+                    COUNT(*) AS runs
+             FROM history
+             WHERE created_at >= ?1
+             GROUP BY day
+             ORDER BY day ASC",
+        )
+        .bind(since_rfc3339)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Per-connection cost totals over the trailing window. The
+    /// `provider_label` column in history holds "<connection label> ·
+    /// <model id>", so we group on the prefix before " · " to merge
+    /// runs across different models on the same connection. Returns
+    /// rows of `(connection_label, micros, runs)` ordered by spend desc.
+    pub async fn cost_by_connection(
+        &self,
+        since_rfc3339: &str,
+    ) -> AppResult<Vec<(String, i64, i64)>> {
+        let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT
+               CASE
+                 WHEN instr(provider_label, ' · ') > 0
+                   THEN substr(provider_label, 1, instr(provider_label, ' · ') - 1)
+                 ELSE provider_label
+               END AS label,
+               COALESCE(SUM(cost_micros), 0) AS micros,
+               COUNT(*) AS runs
+             FROM history
+             WHERE created_at >= ?1
+             GROUP BY label
+             ORDER BY micros DESC, runs DESC",
+        )
+        .bind(since_rfc3339)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Aggregate cost over windows for the dashboard widget. Returns
     /// (month_micros, week_micros, total_micros, month_priced_runs, month_unpriced_runs).
     pub async fn cost_summary(

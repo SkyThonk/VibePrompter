@@ -52,7 +52,10 @@ export function Toggle({ value, onChange, size = 'md', disabled, ...aria }: Togg
         style={{
           width: dot,
           height: dot,
-          background: value ? '#1a0f2e' : 'var(--fg-mute)',
+          // White thumb on the accent-coloured "on" track reads cleanly
+          // against every accent in both themes. The previous near-black
+          // was muddy on light-theme accents and looked off-brand on dark.
+          background: value ? '#ffffff' : 'var(--fg-mute)',
           transform: 'translateX(var(--ph-toggle-x))',
           transition:
             'transform 160ms cubic-bezier(.34,1.56,.64,1), background 140ms ease-out',
