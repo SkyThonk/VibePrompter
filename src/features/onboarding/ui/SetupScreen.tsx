@@ -117,7 +117,7 @@ export function SetupScreen() {
           'radial-gradient(60% 50% at 50% 0%, rgba(167,139,250,.07), transparent), var(--bg)',
       }}
     >
-      <div className="max-w-[720px] mx-auto px-8 pt-10 pb-12 flex flex-col gap-6">
+      <div className="w-full px-8 pt-10 pb-12 flex flex-col gap-6">
         <header className="flex items-center gap-3.5 mb-1">
           <AppIcon size="xl" />
           <div className="flex-1">
