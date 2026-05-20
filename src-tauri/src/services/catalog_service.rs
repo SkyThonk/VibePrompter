@@ -36,6 +36,25 @@ impl CatalogService {
         self.modes.delete(id).await
     }
 
+    /// Move a mode one slot up or down in the sort order. The caller passes
+    /// `direction = "up"` or `"down"`. Built-in (system) modes are excluded
+    /// from reordering — they have negative sort_orders and a fixed slot at
+    /// the top of the list. No-op when the mode is already at the boundary.
+    pub async fn reorder_mode(&self, id: &str, direction: &str) -> AppResult<()> {
+        let all = self.modes.list().await?;
+        let user_modes: Vec<&PromptMode> = all.iter().filter(|m| !m.is_system).collect();
+        let idx = match user_modes.iter().position(|m| m.id == id) {
+            Some(i) => i,
+            None => return Ok(()), // system mode or missing — silent no-op
+        };
+        let neighbor = match direction {
+            "up" if idx > 0 => &user_modes[idx - 1],
+            "down" if idx + 1 < user_modes.len() => &user_modes[idx + 1],
+            _ => return Ok(()), // already at boundary
+        };
+        self.modes.swap_sort_order(id, &neighbor.id).await
+    }
+
     /// List all providers.
     pub async fn list_providers(&self) -> AppResult<Vec<ProviderInfo>> {
         self.providers.list().await
@@ -53,7 +72,8 @@ mod tests {
         let pool = test_pool().await;
         let service =
             CatalogService::new(ModeRepo::new(pool.clone()), ProviderRepo::new(pool.clone()));
-        assert_eq!(service.list_modes().await.unwrap().len(), 6);
+        // 6 user-editable seeded modes + 2 system modes (grammar, summarize).
+        assert_eq!(service.list_modes().await.unwrap().len(), 8);
         assert_eq!(service.list_providers().await.unwrap().len(), 4);
     }
 }

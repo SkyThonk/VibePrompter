@@ -26,6 +26,10 @@ pub struct HistoryItem {
     pub input_tokens: i64,
     #[serde(rename = "outputTokens")]
     pub output_tokens: i64,
+    /// Per-run cost in micro-dollars (1 USD = 1_000_000). 0 = unknown
+    /// (local model, missing usage from the vendor, or unrecognized model id).
+    #[serde(rename = "costMicros")]
+    pub cost_micros: i64,
 }
 
 /// Input for inserting a new history record (used by sub-project 2).
@@ -40,6 +44,7 @@ pub struct NewHistoryItem {
     pub latency_ms: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub cost_micros: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

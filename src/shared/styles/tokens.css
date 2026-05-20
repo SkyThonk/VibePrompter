@@ -364,15 +364,32 @@ input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
 input:-webkit-autofill:active,
+input:autofill,
 textarea:-webkit-autofill,
 textarea:-webkit-autofill:hover,
 textarea:-webkit-autofill:focus,
-textarea:-webkit-autofill:active {
-  -webkit-box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
-  box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
+textarea:-webkit-autofill:active,
+textarea:autofill,
+select:-webkit-autofill,
+select:autofill {
+  /* `background-clip: text` makes the autofill background paint ONLY behind
+     the text glyphs — so the colored layer the browser insists on drawing
+     becomes invisible everywhere except where it would overlap text, and
+     the `-webkit-text-fill-color` below overrides that anyway. This works
+     even when Edge / WebView2 paints autofill above any inset box-shadow
+     (which is what was leaking the accent-tinted band through). The long
+     transition keeps the override from being undone on focus/blur. */
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
   -webkit-text-fill-color: var(--fg) !important;
+  color: var(--fg) !important;
   caret-color: var(--fg) !important;
-  transition: background-color 9999s ease-out 0s, color 9999s ease-out 0s;
+  /* Belt + suspenders: also kill the inset fill in case background-clip
+     isn't honored. Transparent so the wrapper's background shows through
+     cleanly without us having to keep two CSS vars in sync. */
+  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+  box-shadow: 0 0 0 1000px transparent inset !important;
+  transition: background-color 600000s 0s, color 600000s 0s;
 }
 
 /* Loading skeleton with a moving sheen. Wrap any block-level element in

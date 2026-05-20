@@ -135,37 +135,6 @@ export function AdvancedPanel() {
             </div>
           }
         />
-        <SettingRow
-          icon={<I.history size={14} />}
-          label="Request timeout (seconds)"
-          hint="Applies to every outbound LLM HTTP call. Clamped 5–600."
-          control={
-            <div style={{ width: 120 }}>
-              <PhInput
-                mono
-                type="number"
-                value={String(settings.response_timeout)}
-                onChange={(val) => {
-                  const v = Number(val);
-                  if (Number.isFinite(v) && v > 0) {
-                    saveSettings.mutate({ ...settings, response_timeout: Math.round(v) });
-                  }
-                }}
-              />
-            </div>
-          }
-        />
-        <SettingRow
-          icon={<I.bolt size={14} />}
-          label="Stream responses"
-          hint="When off, the dashboard waits for the full reply instead of showing tokens live."
-          control={
-            <Toggle
-              value={settings.stream_response}
-              onChange={(v) => saveSettings.mutate({ ...settings, stream_response: v })}
-            />
-          }
-        />
       </Group>
 
       <Group title="Developer">
@@ -193,6 +162,17 @@ export function AdvancedPanel() {
             <div style={{ width: 240 }}>
               <PhInput mono placeholder="https://proxy.example.com" value={settings.proxy_url} onChange={(v) => saveSettings.mutate({ ...settings, proxy_url: v })} />
             </div>
+          }
+        />
+        <SettingRow
+          icon={<I.sparkles size={14} />}
+          label="Stream AI response"
+          hint="Tokens appear live as they arrive. Disable only for slow networks or proxies that buffer SSE poorly."
+          control={
+            <Toggle
+              value={settings.stream_response}
+              onChange={(v) => saveSettings.mutate({ ...settings, stream_response: v })}
+            />
           }
         />
       </Group>

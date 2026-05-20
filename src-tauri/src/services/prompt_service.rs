@@ -60,7 +60,10 @@ impl PromptService {
             model: None, // honor the connection's default model
             temperature: Some(mode.temperature),
             max_tokens: Some(mode.max_tokens as u32),
-            system: Some(mode.system_prompt.clone()),
+            system: Some(crate::services::prompt_template::render(
+                &mode.system_prompt,
+                &mode.variables,
+            )),
         };
 
         // Precedence: explicit `connection_id` arg → mode's `provider_override`
@@ -84,6 +87,11 @@ impl PromptService {
             resolved_conn_id.as_deref(),
             &result.model,
         );
+        let cost_micros = crate::services::pricing::cost_micros(
+            &result.model,
+            result.usage.input_tokens as i64,
+            result.usage.output_tokens as i64,
+        );
         if let Err(e) = self
             .history
             .record(NewHistoryItem {
@@ -95,6 +103,7 @@ impl PromptService {
                 latency_ms: result.latency_ms as i64,
                 input_tokens: result.usage.input_tokens as i64,
                 output_tokens: result.usage.output_tokens as i64,
+                cost_micros,
             })
             .await
         {
@@ -164,7 +173,10 @@ pub async fn run_with_row(
             model: None,
             temperature: Some(mode.temperature),
             max_tokens: Some(mode.max_tokens as u32),
-            system: Some(mode.system_prompt.clone()),
+            system: Some(crate::services::prompt_template::render(
+                &mode.system_prompt,
+                &mode.variables,
+            )),
         },
         // `run_with_row` is a dead-code escape hatch — use default HTTP
         // config; real callers go through `ConnectionService` which threads
@@ -173,6 +185,11 @@ pub async fn run_with_row(
     )
     .await?;
 
+    let cost_micros = crate::services::pricing::cost_micros(
+        &result.model,
+        result.usage.input_tokens as i64,
+        result.usage.output_tokens as i64,
+    );
     let _ = history
         .record(NewHistoryItem {
             mode_name: mode.name,
@@ -183,6 +200,7 @@ pub async fn run_with_row(
             latency_ms: result.latency_ms as i64,
             input_tokens: result.usage.input_tokens as i64,
             output_tokens: result.usage.output_tokens as i64,
+            cost_micros,
         })
         .await;
     Ok(result)

@@ -40,12 +40,6 @@ export function GeneralPanel() {
           hint="Mode-switch HUD plus native Windows toasts when the main window is hidden."
           control={<Toggle value={settings.notifications} onChange={(v) => set('notifications', v)} />}
         />
-        <SettingRow
-          icon={<I.sparkles size={14} />}
-          label="Stream AI response"
-          hint="Show tokens as they arrive. Disable for slow networks or proxies that buffer SSE poorly."
-          control={<Toggle value={settings.stream_response} onChange={(v) => set('stream_response', v)} />}
-        />
       </Group>
 
       <Group title="Performance">

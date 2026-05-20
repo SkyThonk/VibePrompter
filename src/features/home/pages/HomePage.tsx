@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { I, PhButton, useToast, AppIcon, type IconName } from '@shared/ui';
@@ -26,15 +26,8 @@ interface CatalogMode {
   temp: number;
   maxTok: number;
   provider?: string | null;
-  tags?: string;
   enabled: boolean;
-}
-
-interface CompletionResult {
-  text: string;
-  model: string;
-  latencyMs: number;
-  usage?: { inputTokens: number; outputTokens: number };
+  isSystem: boolean;
 }
 
 interface Connection {
@@ -65,16 +58,15 @@ interface HistoryItem {
   createdAt: string;
   inputTokens?: number;
   outputTokens?: number;
+  costMicros?: number;
 }
 
-interface AppSettings {
-  boot_start: boolean;
-  notifications: boolean;
-  quit_on_close: boolean;
-  minimize_to_tray: boolean;
-  stream_response: boolean;
-  theme: string;
-  accent: string;
+interface CostSummary {
+  monthMicros: number;
+  weekMicros: number;
+  totalMicros: number;
+  monthRunsPriced: number;
+  monthRunsUnpriced: number;
 }
 
 /**
@@ -97,19 +89,17 @@ export function HomePage() {
   const [active, setActive] = useState<ActiveMode | null>(null);
   const [modes, setModes] = useState<CatalogMode[]>([]);
   const [shortcuts, setShortcuts] = useState<ShortcutBinding[]>([]);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [recent, setRecent] = useState<HistoryItem[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  const [cost, setCost] = useState<CostSummary | null>(null);
+  const [showHotkeyTip, setShowHotkeyTip] = useState(false);
   // Tracks whether the initial parallel fetch batch has resolved. Until it
   // flips true, empty arrays / null states are indistinguishable from "still
   // loading", so each section renders a shimmer skeleton instead of its
   // empty-state placeholder. A subsequent reload (window focus, event push)
   // does NOT toggle this back — we only ever want the skeleton on first paint.
   const [bootLoaded, setBootLoaded] = useState(false);
-
-  const reloadSettings = () =>
-    invokeCommand<AppSettings>('get_settings').then(setSettings).catch(() => {});
 
   const reloadAll = () => {
     invokeCommand<ActiveMode>('get_active_mode').then(setActive).catch(() => {});
@@ -119,7 +109,7 @@ export function HomePage() {
       .catch(() => {});
     invokeCommand<Connection[]>('list_connections').then(setConnections).catch(() => {});
     invokeCommand<HealthReport>('run_health_check').then(setHealth).catch(() => {});
-    reloadSettings();
+    invokeCommand<CostSummary>('get_cost_summary').then(setCost).catch(() => {});
   };
 
   useEffect(() => {
@@ -129,15 +119,24 @@ export function HomePage() {
     Promise.allSettled([
       invokeCommand<ActiveMode>('get_active_mode').then(setActive),
       invokeCommand<CatalogMode[]>('list_modes').then((all) =>
-        setModes(all.filter((m) => m.enabled))
+        // Filter out built-in modes (Grammar, Summarize). They have dedicated
+        // global shortcuts and don't belong in the dashboard switcher or cycle
+        // rotation — same filter the tray/setup applies on the backend.
+        setModes(all.filter((m) => m.enabled && !m.isSystem))
       ),
       invokeCommand<ShortcutBinding[]>('list_global_shortcuts').then(setShortcuts),
-      reloadSettings(),
       invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } }).then(
         setRecent
       ),
       invokeCommand<Connection[]>('list_connections').then(setConnections),
       invokeCommand<HealthReport>('run_health_check').then(setHealth),
+      invokeCommand<CostSummary>('get_cost_summary').then(setCost),
+      // First-run tip: show the "select text anywhere → press the hotkey"
+      // banner once, until the user dismisses it. The flag lives in the
+      // settings KV so it survives across restarts.
+      invokeCommand<string | null>('get_kv', { key: 'hotkey_tip_dismissed' }).then((v) => {
+        if (!v) setShowHotkeyTip(true);
+      }),
     ]).finally(() => setBootLoaded(true));
 
     // Browser-style window focus event — fires when the Tauri webview
@@ -158,39 +157,14 @@ export function HomePage() {
     const inFlightTimer = window.setInterval(pollInFlight, 1000);
 
     const modePromise = listen<ActiveMode>('mode_changed', (e) => setActive(e.payload));
-    // The settings_changed event is fired from `SettingsService::save` —
-    // re-fetch so toggles flipped elsewhere (tray, future panels) stay live.
-    const settingsPromise = listen('settings_changed', () => reloadSettings());
     return () => {
       window.removeEventListener('focus', onFocus);
       window.clearInterval(inFlightTimer);
       modePromise.then((u) => u()).catch(() => {});
-      settingsPromise.then((u) => u()).catch(() => {});
     };
   }, []);
 
-  const [input, setInput] = useState('');
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<CompletionResult | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [streamId, setStreamId] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState<{ inFlight: number; capacity: number } | null>(null);
-  // Tracks whether we've already auto-focused the textarea this session so the
-  // ref-callback doesn't re-focus on every render (which would steal focus
-  // mid-typing). Stays true after the first focus until the component unmounts.
-  const inputFocused = useRef(false);
-
-  // History panel's "Reuse" button stashes the source text here. Hydrate
-  // it once on mount, then clear so a later route change doesn't re-fill.
-  useEffect(() => {
-    try {
-      const stashed = sessionStorage.getItem('dashboard:input-stash');
-      if (stashed) {
-        setInput(stashed);
-        sessionStorage.removeItem('dashboard:input-stash');
-      }
-    } catch {}
-  }, []);
 
   // Show a one-time "Updated to vX" toast after an app version bump. We compare
   // the running version to the value we stashed last launch; if they differ,
@@ -228,102 +202,6 @@ export function HomePage() {
     };
   }, [toast]);
 
-  const runPrompt = async () => {
-    if (!active || !input.trim() || running) return;
-    setRunning(true);
-    setRunError(null);
-    setResult({ text: '', model: '', latencyMs: 0 });
-
-    // When the user has disabled streaming, take the simpler blocking path —
-    // matches the user's intent and avoids SSE on networks that proxy it badly.
-    if (settings && settings.stream_response === false) {
-      try {
-        const r = await invokeCommand<CompletionResult>('run_prompt', {
-          modeId: active.id,
-          input,
-        });
-        setResult(r);
-        invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } })
-          .then(setRecent)
-          .catch(() => {});
-      } catch (e) {
-        setRunError(typeof e === 'string' ? e : String(e));
-        setResult(null);
-      } finally {
-        setRunning(false);
-      }
-      return;
-    }
-
-    const newStreamId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    setStreamId(newStreamId);
-    const tokenEv = `stream:${newStreamId}:token`;
-    const doneEv = `stream:${newStreamId}:done`;
-    const errEv = `stream:${newStreamId}:error`;
-
-    const unlistens: Array<() => void> = [];
-    const cleanup = () => unlistens.forEach((u) => u());
-
-    try {
-      let buf = '';
-      unlistens.push(
-        await listen<string>(tokenEv, (e) => {
-          buf += e.payload;
-          setResult((prev) => (prev ? { ...prev, text: buf } : { text: buf, model: '', latencyMs: 0 }));
-        })
-      );
-      unlistens.push(
-        await listen<CompletionResult>(doneEv, (e) => {
-          setResult(e.payload);
-          invokeCommand<HistoryItem[]>('get_history', { query: { limit: 4, offset: 0 } })
-            .then(setRecent)
-            .catch(() => {});
-          setRunning(false);
-          setStreamId(null);
-          cleanup();
-        })
-      );
-      unlistens.push(
-        await listen<string>(errEv, (e) => {
-          // 'cancelled' is the sentinel the backend emits when the user hit
-          // Stop — treat it as a graceful end (keep partial output visible),
-          // not an error.
-          if (e.payload === 'cancelled') {
-            setRunError(null);
-          } else {
-            setRunError(e.payload);
-            setResult(null);
-          }
-          setRunning(false);
-          setStreamId(null);
-          cleanup();
-        })
-      );
-
-      await invokeCommand<void>('run_prompt_stream', {
-        streamId: newStreamId,
-        modeId: active.id,
-        input,
-      });
-    } catch (e) {
-      cleanup();
-      setRunError(typeof e === 'string' ? e : String(e));
-      setResult(null);
-      setRunning(false);
-      setStreamId(null);
-    }
-  };
-
-  const stopPrompt = () => {
-    if (!streamId) return;
-    invokeCommand<void>('cancel_stream', { streamId }).catch(() => {});
-  };
-
-  const copyResult = () => {
-    if (!result?.text) return;
-    navigator.clipboard.writeText(result.text).catch(() => {});
-  };
-
   const cycleMode = () =>
     invokeCommand<void>('cycle_mode_cmd').catch(() => {});
 
@@ -332,63 +210,11 @@ export function HomePage() {
 
   const quitApp = () => invokeCommand<void>('quit_app').catch(() => {});
 
-  const toggleSetting = (key: keyof AppSettings) => {
-    if (!settings) return;
-    const next = { ...settings, [key]: !settings[key] };
-    setSettings(next); // optimistic — the backend event will reconcile
-    invokeCommand<void>('save_settings', { settings: next }).catch(() => {
-      // Rollback on failure so the UI doesn't lie.
-      setSettings(settings);
-    });
-  };
-
-  /** Cycle dark → light → system → dark. Same options the Appearance panel
-      exposes, but reachable without leaving the dashboard. */
-  const cycleTheme = () => {
-    if (!settings) return;
-    const order = ['dark', 'light', 'system'] as const;
-    const idx = order.indexOf(settings.theme as (typeof order)[number]);
-    const next = order[(idx + 1) % order.length];
-    const updated = { ...settings, theme: next };
-    setSettings(updated);
-    invokeCommand<void>('save_settings', { settings: updated }).catch(() => {
-      setSettings(settings);
-    });
-  };
-
   const activeIconKey = (active?.iconName ?? 'bolt') as IconName;
   const ActiveIcon =
     (I as Record<string, React.ComponentType<{ size?: number }>>)[activeIconKey] ?? I.bolt;
 
   const defaultConn = connections.find((c) => c.isDefault);
-  const usableConn = defaultConn?.hasKey ? defaultConn : null;
-  const connectionNotice = (() => {
-    if (connections.length === 0) {
-      return {
-        kind: 'empty' as const,
-        title: 'No provider connection yet',
-        body: 'Add an OpenAI / Anthropic / OpenRouter / Ollama / any vendor connection to start running prompts.',
-        cta: 'Add a connection',
-      };
-    }
-    if (!defaultConn) {
-      return {
-        kind: 'missing-default' as const,
-        title: 'No default connection',
-        body: 'Pick which connection prompts should run through.',
-        cta: 'Set a default',
-      };
-    }
-    if (!defaultConn.hasKey) {
-      return {
-        kind: 'missing-key' as const,
-        title: `"${defaultConn.label}" has no API key`,
-        body: 'Add the key so completions can authenticate with the vendor.',
-        cta: 'Add API key',
-      };
-    }
-    return null;
-  })();
 
   return (
     <div
@@ -436,6 +262,18 @@ export function HomePage() {
         </header>
 
         {!bootLoaded && <DashboardSkeleton />}
+
+        {bootLoaded && showHotkeyTip && connections.length > 0 && (
+          <HotkeyTipCard
+            onDismiss={() => {
+              setShowHotkeyTip(false);
+              invokeCommand<void>('set_kv', {
+                key: 'hotkey_tip_dismissed',
+                value: JSON.stringify(true),
+              }).catch(() => {});
+            }}
+          />
+        )}
 
         {bootLoaded && health && health.issues.length > 0 && (
           <section className="flex flex-col gap-1.5">
@@ -512,10 +350,21 @@ export function HomePage() {
                   <ActiveIcon size={22} />
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[10.5px] uppercase tracking-[0.12em] text-fg-dim font-semibold">
-                    Active mode
+                  <div className="text-[10.5px] uppercase tracking-[0.12em] text-fg-dim font-semibold flex items-center gap-1.5">
+                    <span>Rewrite hotkey uses</span>
+                    <kbd
+                      className="ph-mono text-[10px] px-1.5 py-0.5 rounded normal-case"
+                      style={{
+                        background: 'var(--surface-2)',
+                        border: '.5px solid var(--border-strong)',
+                        letterSpacing: 0,
+                      }}
+                      title="Press anywhere to rewrite the selected text in any app"
+                    >
+                      Ctrl+Alt+Space
+                    </kbd>
                   </div>
-                  <div className="text-[20px] font-semibold text-fg-strong leading-tight">
+                  <div className="text-[20px] font-semibold text-fg-strong leading-tight mt-0.5">
                     {active?.name ?? '—'}
                   </div>
                   {activeFull?.desc && (
@@ -523,6 +372,9 @@ export function HomePage() {
                       {activeFull.desc}
                     </div>
                   )}
+                  <div className="text-[11px] text-fg-dim mt-1">
+                    Grammar (Ctrl+Alt+G) and Summarize (Ctrl+Alt+S) have their own dedicated prompts and ignore this setting.
+                  </div>
                 </div>
                 <PhButton
                   variant="primary"
@@ -613,7 +465,7 @@ export function HomePage() {
           );
         })()}
 
-        {bootLoaded && (connections.length === 0 ? (
+        {bootLoaded && connections.length === 0 && (
           <section
             className="rounded-xl p-6 flex flex-col items-center text-center gap-3"
             style={{
@@ -659,253 +511,8 @@ export function HomePage() {
               </PhButton>
             </div>
           </section>
-        ) : (
-
-        <section
-          className="rounded-xl p-5 flex flex-col gap-3"
-          style={{
-            background: 'var(--surface)',
-            border: '.5px solid var(--border)',
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="m-0 text-[13px] font-semibold text-fg uppercase tracking-[0.10em]">
-              Run a prompt
-            </h2>
-            <span className="text-[11.5px] text-fg-dim">
-              {usableConn
-                ? `${usableConn.label}${
-                    usableConn.defaultModel ? ` · ${usableConn.defaultModel}` : ''
-                  } · ${active?.name ?? 'no mode'}`
-                : active
-                ? `${active.name} mode`
-                : 'Pick a mode above'}
-            </span>
-          </div>
-
-          {connectionNotice && (
-            <div
-              className="rounded-md p-3 flex items-center gap-3"
-              style={{
-                background: 'var(--accent-tint)',
-                border: '.5px solid var(--accent-tint-2)',
-              }}
-            >
-              <span
-                className="w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0"
-                style={{ background: 'var(--surface)', color: 'var(--accent)' }}
-              >
-                <I.cloud size={16} />
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] text-fg-strong font-medium">
-                  {connectionNotice.title}
-                </div>
-                <div className="text-[12px] text-fg-mute mt-0.5">{connectionNotice.body}</div>
-              </div>
-              <PhButton
-                size="sm"
-                variant="primary"
-                icon={<I.plus size={12} />}
-                onClick={() => navigate('/settings/providers')}
-              >
-                {connectionNotice.cta}
-              </PhButton>
-            </div>
-          )}
-          <textarea
-            ref={(el) => {
-              // Autofocus when the widget first becomes usable. We watch via
-              // ref-callback so it fires once after mount + once after the
-              // empty-state replacement swaps in the real widget — not on
-              // every render (which would steal focus mid-typing).
-              if (el && usableConn && !inputFocused.current) {
-                inputFocused.current = true;
-                el.focus();
-              }
-            }}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Paste or type the text you want to transform. Ctrl+Enter runs."
-            rows={4}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault();
-                runPrompt();
-              }
-            }}
-            className="w-full text-[13px] resize-y rounded-md px-3 py-2 outline-none transition-colors"
-            style={{
-              background: 'var(--bg-2)',
-              border: '.5px solid var(--border-strong)',
-              color: 'var(--fg)',
-              fontFamily: 'var(--sans)',
-              minHeight: 80,
-            }}
-          />
-          {runError && (
-            <div
-              className="rounded-md px-3 py-2 text-[12.5px] flex items-start gap-2"
-              style={{
-                background: 'rgba(248,113,113,0.10)',
-                color: 'var(--danger)',
-                border: '.5px solid rgba(248,113,113,0.30)',
-              }}
-            >
-              <span className="flex-1">{runError}</span>
-              {runError.toLowerCase().includes('no default connection') && (
-                <button
-                  type="button"
-                  onClick={() => navigate('/settings/providers')}
-                  className="text-[11.5px] underline"
-                  style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}
-                >
-                  Add a connection →
-                </button>
-              )}
-            </div>
-          )}
-          {result && (
-            <div
-              className="rounded-md p-3 flex flex-col gap-2"
-              style={{
-                background: 'var(--bg-2)',
-                border: '.5px solid var(--border)',
-              }}
-            >
-              <div className="flex items-center gap-2 text-[11px] text-fg-dim ph-mono">
-                <span>{result.model}</span>
-                <span>·</span>
-                <span>{result.latencyMs}ms</span>
-                {result.usage && (result.usage.inputTokens > 0 || result.usage.outputTokens > 0) && (
-                  <>
-                    <span>·</span>
-                    <span title="Vendor-reported token usage (input → output)">
-                      {result.usage.inputTokens} → {result.usage.outputTokens} tok
-                    </span>
-                  </>
-                )}
-                <span className="flex-1" />
-                <button
-                  type="button"
-                  onClick={copyResult}
-                  className="text-[11px] hover:text-fg-strong transition-colors"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-mute)' }}
-                  title="Copy result to clipboard"
-                >
-                  Copy
-                </button>
-              </div>
-              <pre
-                className="m-0 text-[13px] whitespace-pre-wrap break-words"
-                style={{
-                  color: 'var(--fg-strong)',
-                  fontFamily: 'var(--sans)',
-                  maxHeight: 260,
-                  overflow: 'auto',
-                }}
-              >
-                {result.text}
-              </pre>
-            </div>
-          )}
-          <div className="flex items-center gap-2 justify-end">
-            <span className="text-[11px] text-fg-dim ph-mono mr-auto">
-              <kbd
-                className="ph-mono text-[10.5px] px-1.5 py-0.5 rounded mr-0.5"
-                style={{ background: 'var(--surface-2)', border: '.5px solid var(--border-strong)' }}
-              >
-                Ctrl
-              </kbd>
-              +
-              <kbd
-                className="ph-mono text-[10.5px] px-1.5 py-0.5 rounded mx-0.5"
-                style={{ background: 'var(--surface-2)', border: '.5px solid var(--border-strong)' }}
-              >
-                Enter
-              </kbd>
-              to run
-            </span>
-            {input && (
-              <button
-                type="button"
-                onClick={() => {
-                  setInput('');
-                  setResult(null);
-                  setRunError(null);
-                }}
-                className="text-[11.5px] text-fg-mute hover:text-fg transition-colors"
-                style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-              >
-                Clear
-              </button>
-            )}
-            {running ? (
-              <PhButton
-                variant="danger"
-                size="md"
-                icon={<I.close size={14} />}
-                onClick={stopPrompt}
-                title="Stop generation"
-              >
-                Stop
-              </PhButton>
-            ) : (
-              <PhButton
-                variant="primary"
-                size="md"
-                icon={<I.bolt size={14} />}
-                onClick={runPrompt}
-                disabled={!active || !input.trim() || !usableConn}
-                title={!usableConn ? 'Add a connection first' : 'Run prompt (Ctrl+Enter)'}
-              >
-                Run
-              </PhButton>
-            )}
-          </div>
-        </section>
-        ))}
-
-        {bootLoaded && settings && (
-          <section
-            className="rounded-lg px-4 py-3 flex items-center gap-2 flex-wrap"
-            style={{
-              background: 'var(--surface)',
-              border: '.5px solid var(--border)',
-            }}
-          >
-            <StatusToggle
-              label="Start at login"
-              on={settings.boot_start}
-              onClick={() => toggleSetting('boot_start')}
-            />
-            <StatusToggle
-              label="Notifications"
-              on={settings.notifications}
-              onClick={() => toggleSetting('notifications')}
-            />
-            <StatusToggle
-              label="Minimize to tray"
-              on={settings.minimize_to_tray}
-              onClick={() => toggleSetting('minimize_to_tray')}
-            />
-            <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              onClick={cycleTheme}
-              className="text-[11.5px] text-fg-mute ph-mono px-2 py-0.5 rounded transition-colors"
-              style={{
-                background: 'var(--surface-2)',
-                border: '.5px solid var(--border)',
-                cursor: 'pointer',
-              }}
-              title="Cycle theme — click to switch dark / light / system"
-            >
-              {settings.theme === 'dark' ? '☾' : settings.theme === 'light' ? '☀' : '⌘'}{' '}
-              {settings.theme}
-            </button>
-          </section>
         )}
+
 
         {bootLoaded && <section className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between">
@@ -918,7 +525,61 @@ export function HomePage() {
               {modes.length} modes
             </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div
+            className="grid grid-cols-2 sm:grid-cols-3 gap-2"
+            role="radiogroup"
+            aria-label="Select active mode"
+            onKeyDown={(e) => {
+              // Arrow-key nav between the mode tiles. Computes the grid
+              // column count from the live CSS layout so the same handler
+              // works for the 2-col and 3-col responsive breakpoints
+              // without us hardcoding either.
+              if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+                return;
+              }
+              const grid = e.currentTarget;
+              const buttons = Array.from(
+                grid.querySelectorAll<HTMLButtonElement>('button[data-mode-tile="true"]')
+              );
+              if (buttons.length === 0) return;
+              const focusedIdx = buttons.findIndex((b) => b === document.activeElement);
+              if (focusedIdx === -1) {
+                e.preventDefault();
+                buttons[0].focus();
+                return;
+              }
+              // Detect column count by checking offsetTop of the second row's
+              // first tile. Tiles in the same row share offsetTop.
+              const firstTop = buttons[0].offsetTop;
+              let cols = buttons.findIndex((b) => b.offsetTop !== firstTop);
+              if (cols === -1) cols = buttons.length;
+              let next = focusedIdx;
+              switch (e.key) {
+                case 'ArrowRight':
+                  next = Math.min(focusedIdx + 1, buttons.length - 1);
+                  break;
+                case 'ArrowLeft':
+                  next = Math.max(focusedIdx - 1, 0);
+                  break;
+                case 'ArrowDown':
+                  next = Math.min(focusedIdx + cols, buttons.length - 1);
+                  break;
+                case 'ArrowUp':
+                  next = Math.max(focusedIdx - cols, 0);
+                  break;
+                case 'Home':
+                  next = 0;
+                  break;
+                case 'End':
+                  next = buttons.length - 1;
+                  break;
+              }
+              if (next !== focusedIdx) {
+                e.preventDefault();
+                buttons[next].focus();
+              }
+            }}
+          >
             {modes.map((m) => {
               const Icon =
                 (I as Record<string, React.ComponentType<{ size?: number }>>)[m.iconName] ??
@@ -928,10 +589,12 @@ export function HomePage() {
                 <button
                   key={m.id}
                   type="button"
+                  role="radio"
+                  aria-checked={isActive}
+                  data-mode-tile="true"
                   onClick={() => pickMode(m.id)}
-                  aria-pressed={isActive}
                   aria-label={`Switch to ${m.name} mode`}
-                  className="rounded-lg p-3 flex items-center gap-2.5 text-left transition-[background,border-color,transform] duration-150 active:scale-[0.98]"
+                  className="rounded-lg p-3 flex items-center gap-2.5 text-left transition-[background,border-color,transform] duration-150 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
                   style={{
                     background: isActive ? 'var(--accent-tint)' : 'var(--surface)',
                     border: `.5px solid ${
@@ -1152,6 +815,9 @@ export function HomePage() {
                         {(h.inputTokens ?? 0) + (h.outputTokens ?? 0) > 0 && (
                           <> · {h.inputTokens}→{h.outputTokens} tok</>
                         )}
+                        {(h.costMicros ?? 0) > 0 && (
+                          <> · {formatCost(h.costMicros!)}</>
+                        )}
                       </div>
                     </div>
                     <span className="text-[11px] text-fg-dim ph-mono">
@@ -1169,7 +835,7 @@ export function HomePage() {
           className="flex items-center justify-between pt-4"
           style={{ borderTop: '.5px solid var(--divider)' }}
         >
-          <span className="text-[11.5px] text-fg-dim ph-mono flex items-center gap-2">
+          <span className="text-[11.5px] text-fg-dim ph-mono flex items-center gap-2 flex-wrap">
             VibePrompter · close to hide to tray
             {inFlight && inFlight.inFlight > 0 && (
               <span
@@ -1182,6 +848,26 @@ export function HomePage() {
                 title={`${inFlight.inFlight} request${inFlight.inFlight === 1 ? '' : 's'} in flight (max ${inFlight.capacity})`}
               >
                 ● {inFlight.inFlight}/{inFlight.capacity}
+              </span>
+            )}
+            {cost && cost.monthMicros > 0 && (
+              <span
+                className="px-1.5 py-0.5 rounded"
+                style={{
+                  background: 'var(--surface-2)',
+                  color: 'var(--fg-mute)',
+                  border: '.5px solid var(--border)',
+                }}
+                title={
+                  `~${formatCost(cost.monthMicros)} spent in the last 30 days across ` +
+                  `${cost.monthRunsPriced} priced runs` +
+                  (cost.monthRunsUnpriced > 0
+                    ? ` (+${cost.monthRunsUnpriced} local / unpriced runs not counted)`
+                    : '') +
+                  '. Estimate from public per-token pricing; vendor invoices are authoritative.'
+                }
+              >
+                ~{formatCost(cost.monthMicros)} this month
               </span>
             )}
           </span>
@@ -1207,6 +893,134 @@ export function HomePage() {
           </div>
         </footer>
       </div>
+    </div>
+  );
+}
+
+/**
+ * First-run "try the hotkey" tip. Shows once per install — dismissal is
+ * persisted in the settings KV (`hotkey_tip_dismissed`). The card walks
+ * the user through the actual core flow that's invisible from the UI:
+ * select text anywhere → press the global hotkey → see the result in the
+ * floating overlay. Without this, new users land on the dashboard and
+ * don't realize the product's main feature isn't on this screen at all.
+ */
+function HotkeyTipCard({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <section
+      className="rounded-xl p-5 flex flex-col gap-3"
+      style={{
+        background:
+          'linear-gradient(135deg, var(--accent-tint) 0%, var(--surface) 70%)',
+        border: '.5px solid var(--accent-tint-2)',
+        boxShadow: 'var(--accent-glow)',
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{
+            background: 'var(--accent-tint-2)',
+            color: 'var(--accent)',
+          }}
+        >
+          <I.bolt size={20} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <h2 className="m-0 text-[15px] font-semibold text-fg-strong">
+            Try it now — VibePrompter works from any app
+          </h2>
+          <p className="m-0 text-[12.5px] text-fg-mute mt-1.5 leading-relaxed">
+            Select some text in any window (browser, email, IDE — anything),
+            then press a hotkey. A floating overlay near your cursor shows the
+            result. Hit <kbd className="ph-mono">Enter</kbd> to paste it back,{' '}
+            <kbd className="ph-mono">Esc</kbd> to dismiss.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss tip"
+          className="text-[11.5px] px-2 py-1 rounded transition-colors flex-shrink-0"
+          style={{
+            background: 'transparent',
+            border: '.5px solid var(--border)',
+            color: 'var(--fg-mute)',
+            cursor: 'pointer',
+          }}
+          title="Don't show this again"
+        >
+          Got it
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
+        <TipHotkey
+          accel="Ctrl+Alt+Space"
+          label="Rewrite"
+          hint="Polishes the selection using your active mode."
+        />
+        <TipHotkey
+          accel="Ctrl+Alt+G"
+          label="Fix grammar"
+          hint="Corrects typos and grammar without changing style."
+        />
+        <TipHotkey
+          accel="Ctrl+Alt+S"
+          label="Summarize"
+          hint="Bulleted summary of long text. Copies to clipboard."
+        />
+      </div>
+      <div
+        className="text-[11.5px] text-fg-mute mt-1 flex items-center gap-2"
+        style={{
+          paddingTop: 10,
+          borderTop: '.5px solid var(--accent-tint-2)',
+        }}
+      >
+        <I.info size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <span>
+          VibePrompter lives in your <strong className="text-fg-strong">system tray</strong>.
+          Closing this window keeps it running. On Windows: right-click the tray icon
+          (often hidden under the <kbd className="ph-mono text-[10px]">^</kbd> chevron) →
+          <strong className="text-fg-strong"> Taskbar settings</strong> → show the
+          VibePrompter icon for one-click access.
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function TipHotkey({
+  accel,
+  label,
+  hint,
+}: {
+  accel: string;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <div
+      className="rounded-lg p-3 flex flex-col gap-1"
+      style={{
+        background: 'var(--surface)',
+        border: '.5px solid var(--border)',
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <kbd
+          className="ph-mono text-[11px] px-2 py-0.5 rounded"
+          style={{
+            background: 'var(--surface-2)',
+            color: 'var(--fg-strong)',
+            border: '.5px solid var(--border-strong)',
+          }}
+        >
+          {accel}
+        </kbd>
+        <span className="text-[12.5px] font-semibold text-fg-strong">{label}</span>
+      </div>
+      <span className="text-[11px] text-fg-dim leading-snug">{hint}</span>
     </div>
   );
 }
@@ -1306,6 +1120,18 @@ function nextMode(active: ActiveMode | null, modes: CatalogMode[]): CatalogMode 
  * Lossy "5m ago"-style formatter — good enough for the dashboard's at-a-glance
  * activity strip without pulling in date-fns at the top level.
  */
+/** Format micro-USD (1 USD = 1,000,000 micros) as a short dollar string.
+ *  Sub-cent values become "<$0.01" so users don't see "$0.00" and assume
+ *  the calculation is broken. Estimates only — see backend pricing.rs. */
+function formatCost(micros: number): string {
+  if (micros <= 0) return '$0';
+  const usd = micros / 1_000_000;
+  if (usd < 0.01) return '<$0.01';
+  if (usd < 1) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(2)}`;
+  return `$${Math.round(usd)}`;
+}
+
 function relativeTime(rfc3339: string): string {
   const then = Date.parse(rfc3339);
   if (Number.isNaN(then)) return '';
@@ -1317,42 +1143,6 @@ function relativeTime(rfc3339: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
-}
-
-/**
- * Compact on/off chip the dashboard uses for quick settings access. Clicking
- * flips the value optimistically — the parent reconciles via the
- * `settings_changed` event the backend already emits after `save`.
- */
-function StatusToggle({
-  label,
-  on,
-  onClick,
-}: {
-  label: string;
-  on: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-[11.5px] flex items-center gap-1.5 px-2 py-1 rounded transition-colors"
-      style={{
-        background: on ? 'var(--accent-tint)' : 'var(--surface-2)',
-        color: on ? 'var(--accent)' : 'var(--fg-mute)',
-        border: `.5px solid ${on ? 'var(--accent-tint-2)' : 'var(--border)'}`,
-        cursor: 'pointer',
-      }}
-      title={`${label}: ${on ? 'on — click to disable' : 'off — click to enable'}`}
-    >
-      <span
-        className="inline-block w-1.5 h-1.5 rounded-full"
-        style={{ background: on ? 'var(--ok)' : 'var(--fg-dim)' }}
-      />
-      {label}
-    </button>
-  );
 }
 
 /**

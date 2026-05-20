@@ -23,7 +23,11 @@ interface Mode {
   maxTok: number;
   provider?: string | null;
   iconName: string;
-  tags: string;
+  /** JSON object string of `{ "var": "default value" }`. Substituted into
+   *  `sys` at run time wherever `{{var}}` appears. Empty `{}` if no
+   *  variables. Kept as a string here to match the backend's storage
+   *  shape and avoid round-trip drift through the IPC boundary. */
+  variables: string;
   enabled: boolean;
   isSystem: boolean;
 }
@@ -51,7 +55,7 @@ const blank = (): Mode => ({
   maxTok: 1024,
   provider: null,
   iconName: 'bolt',
-  tags: '',
+  variables: '{}',
   enabled: true,
   isSystem: false,
 });
@@ -63,20 +67,19 @@ interface Template {
   temp: number;
   maxTok: number;
   iconName: IconName;
-  tags: string;
 }
 
 /** Curated starter prompts. Each one drops into a fresh draft as a starting
  *  point — the user owns the resulting mode and can edit anything. */
 const TEMPLATES: Template[] = [
-  { name: 'Blank',              desc: 'Start from an empty prompt.',                                  sys: '',                                                                                                                                                                                                                       temp: 0.5, maxTok: 1024, iconName: 'bolt',     tags: '' },
-  { name: 'Improve writing',    desc: 'Polish grammar, clarity, and flow without changing meaning.',  sys: 'You improve the writing of the user\'s text. Fix grammar, clarity, and flow. Keep the meaning, tone, and language exactly the same. Reply with ONLY the improved text — no preamble, no explanation, no quotes.', temp: 0.3, maxTok: 2048, iconName: 'pen',      tags: 'writing' },
-  { name: 'Make concise',       desc: 'Shorten text while preserving all key information.',          sys: 'Rewrite the user\'s text to be as concise as possible without losing any key information. Drop filler, hedging, and redundancy. Reply with ONLY the shortened text.',                                              temp: 0.3, maxTok: 1024, iconName: 'shorten',  tags: 'writing' },
-  { name: 'Formal tone',        desc: 'Polished, professional voice.',                                sys: 'Rewrite the user\'s text in a polished, professional, formal voice suitable for business communication. Keep the meaning unchanged. Reply with ONLY the rewritten text.',                                          temp: 0.4, maxTok: 2048, iconName: 'formal',   tags: 'writing' },
-  { name: 'Friendly tone',      desc: 'Warm and approachable.',                                       sys: 'Rewrite the user\'s text to sound warm, friendly, and approachable. Keep it professional enough for work. Reply with ONLY the rewritten text.',                                                                  temp: 0.5, maxTok: 2048, iconName: 'friendly', tags: 'writing' },
-  { name: 'Translate to English', desc: 'Natural English translation.',                               sys: 'Translate the user\'s text to natural, fluent English. Preserve tone and meaning. Reply with ONLY the translated text.',                                                                                          temp: 0.3, maxTok: 2048, iconName: 'translate', tags: 'translation' },
-  { name: 'Explain like I\'m 5', desc: 'Plain-language explanation of complex text.',                  sys: 'Explain the user\'s text in plain language a smart 12-year-old would understand. Use short sentences and concrete examples. No jargon.',                                                                          temp: 0.5, maxTok: 2048, iconName: 'wand',     tags: 'utility' },
-  { name: 'Code review',        desc: 'Critique code for bugs, style, and readability.',              sys: 'You are a senior software engineer reviewing the user\'s code. Identify bugs, security issues, performance problems, and readability improvements. Be specific — quote the relevant code when you flag something.', temp: 0.2, maxTok: 3072, iconName: 'code',     tags: 'code' },
+  { name: 'Blank',              desc: 'Start from an empty prompt.',                                  sys: '',                                                                                                                                                                                                                       temp: 0.5, maxTok: 1024, iconName: 'bolt' },
+  { name: 'Improve writing',    desc: 'Polish grammar, clarity, and flow without changing meaning.',  sys: 'You improve the writing of the user\'s text. Fix grammar, clarity, and flow. Keep the meaning, tone, and language exactly the same. Reply with ONLY the improved text — no preamble, no explanation, no quotes.', temp: 0.3, maxTok: 2048, iconName: 'pen' },
+  { name: 'Make concise',       desc: 'Shorten text while preserving all key information.',          sys: 'Rewrite the user\'s text to be as concise as possible without losing any key information. Drop filler, hedging, and redundancy. Reply with ONLY the shortened text.',                                              temp: 0.3, maxTok: 1024, iconName: 'shorten' },
+  { name: 'Formal tone',        desc: 'Polished, professional voice.',                                sys: 'Rewrite the user\'s text in a polished, professional, formal voice suitable for business communication. Keep the meaning unchanged. Reply with ONLY the rewritten text.',                                          temp: 0.4, maxTok: 2048, iconName: 'formal' },
+  { name: 'Friendly tone',      desc: 'Warm and approachable.',                                       sys: 'Rewrite the user\'s text to sound warm, friendly, and approachable. Keep it professional enough for work. Reply with ONLY the rewritten text.',                                                                  temp: 0.5, maxTok: 2048, iconName: 'friendly' },
+  { name: 'Translate to English', desc: 'Natural English translation (auto-detects source language).', sys: 'You are a professional translator. Auto-detect the source language of the user\'s text — it could be any language. Translate it into natural, fluent English.\n\nHard rules:\n- Preserve tone, register, and intent of the original (formal stays formal, casual stays casual).\n- Preserve proper nouns, names, code identifiers, URLs, and numbers exactly.\n- Idioms: prefer the closest English equivalent over a literal translation.\n- If the input is already English (or mixed with English), translate only the non-English portions and leave the English parts unchanged.\n- Do not add notes about the source language or your translation choices.\n- Output ONLY the translated text — no preamble, no commentary, no surrounding quotes.', temp: 0.3, maxTok: 2048, iconName: 'translate' },
+  { name: 'Explain like I\'m 5', desc: 'Plain-language explanation of complex text.',                  sys: 'Explain the user\'s text in plain language a smart 12-year-old would understand. Use short sentences and concrete examples. No jargon.',                                                                          temp: 0.5, maxTok: 2048, iconName: 'wand' },
+  { name: 'Code review',        desc: 'Critique code for bugs, style, and readability.',              sys: 'You are a senior software engineer reviewing the user\'s code. Identify bugs, security issues, performance problems, and readability improvements. Be specific — quote the relevant code when you flag something.', temp: 0.2, maxTok: 3072, iconName: 'code' },
 ];
 
 export function ModesPanel() {
@@ -117,7 +120,7 @@ export function ModesPanel() {
       maxTok: t.maxTok,
       provider: null,
       iconName: t.iconName,
-      tags: t.tags,
+      variables: '{}',
       enabled: true,
       isSystem: false,
     });
@@ -172,30 +175,44 @@ export function ModesPanel() {
     }
   };
 
-  const activate = (id: string) =>
-    invokeCommand<void>('set_active_mode', { id }).then(reload).catch(() => {});
-
   const connectionLabel = (id?: string | null) =>
     connections.find((c) => c.id === id)?.label ?? null;
+
+  const reorder = async (id: string, direction: 'up' | 'down') => {
+    setBusy(true);
+    try {
+      await invokeCommand<void>('reorder_mode', { id, direction });
+      reload();
+    } catch (e) {
+      setErr(typeof e === 'string' ? e : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const matchesSearch = (m: Mode) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
       m.name.toLowerCase().includes(q) ||
-      m.desc.toLowerCase().includes(q) ||
-      m.tags.toLowerCase().includes(q)
+      m.desc.toLowerCase().includes(q)
     );
   };
 
   const systemModes = modes.filter((m) => m.isSystem).filter(matchesSearch);
   const userModes = modes.filter((m) => !m.isSystem).filter(matchesSearch);
 
-  const renderRow = (m: Mode) => {
+  const renderRow = (m: Mode, idx?: number, list?: Mode[]) => {
     const Icon =
       (I as Record<string, React.ComponentType<{ size?: number }>>)[m.iconName] ?? I.bolt;
     const isActive = m.id === active?.id;
     const pinned = connectionLabel(m.provider);
+    // Reorder controls only show on user rows that have a neighbor in
+    // the matching direction. We pass `list` from the caller so the
+    // "first / last" math is honest to filtered views (search applied).
+    const canMoveUp = !m.isSystem && idx !== undefined && idx > 0;
+    const canMoveDown =
+      !m.isSystem && idx !== undefined && list !== undefined && idx + 1 < list.length;
     return (
       <div
         key={m.id}
@@ -225,29 +242,56 @@ export function ModesPanel() {
             temp {m.temp} · max {m.maxTok} tok
           </div>
         </div>
-        <Toggle
-          value={m.enabled}
-          onChange={(v) => toggleEnabled(m, v)}
-          disabled={busy || isActive}
-        />
-        {!isActive && m.enabled && (
-          <PhButton size="sm" variant="ghost" onClick={() => activate(m.id)}>
-            Make active
-          </PhButton>
+        {!m.isSystem && (
+          <Toggle
+            value={m.enabled}
+            onChange={(v) => toggleEnabled(m, v)}
+            disabled={busy || isActive}
+          />
         )}
         {!m.isSystem && (
-          <PhButton
-            size="sm"
-            variant="ghost"
-            title="Duplicate this mode as a starting point for a variant"
-            onClick={() => {
-              setDraft({ ...m, id: '', name: `${m.name} (copy)`, isSystem: false });
-              setShowTemplatePicker(false);
-              setErr(null);
-            }}
+          <div
+            className="flex flex-col"
+            style={{ gap: 1 }}
+            title="Reorder this mode"
           >
-            Duplicate
-          </PhButton>
+            <button
+              type="button"
+              onClick={() => reorder(m.id, 'up')}
+              disabled={!canMoveUp || busy}
+              aria-label="Move up"
+              className="w-6 h-4 flex items-center justify-center rounded-t transition-colors"
+              style={{
+                background: 'var(--surface-2)',
+                border: '.5px solid var(--border)',
+                color: canMoveUp ? 'var(--fg-mute)' : 'var(--fg-dim)',
+                cursor: canMoveUp ? 'pointer' : 'default',
+                opacity: canMoveUp ? 1 : 0.4,
+                fontSize: 10,
+                lineHeight: 1,
+              }}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              onClick={() => reorder(m.id, 'down')}
+              disabled={!canMoveDown || busy}
+              aria-label="Move down"
+              className="w-6 h-4 flex items-center justify-center rounded-b transition-colors"
+              style={{
+                background: 'var(--surface-2)',
+                border: '.5px solid var(--border)',
+                color: canMoveDown ? 'var(--fg-mute)' : 'var(--fg-dim)',
+                cursor: canMoveDown ? 'pointer' : 'default',
+                opacity: canMoveDown ? 1 : 0.4,
+                fontSize: 10,
+                lineHeight: 1,
+              }}
+            >
+              ▼
+            </button>
+          </div>
         )}
         <PhButton
           size="sm"
@@ -333,7 +377,7 @@ export function ModesPanel() {
             title="Your modes"
             hint={userModes.length === 0 ? 'No custom modes yet. Click “New mode” to create one.' : undefined}
           >
-            {userModes.map(renderRow)}
+            {userModes.map((m, i) => renderRow(m, i, userModes))}
           </Section>
         </>
       )}
@@ -407,8 +451,14 @@ function TemplatePicker({
             Pick a tested prompt as a starting point, or start blank.
           </span>
         </div>
-        <PhButton size="sm" variant="ghost" onClick={onCancel}>
-          Cancel
+        <PhButton
+          size="sm"
+          variant="ghost"
+          icon={<I.chevL size={12} />}
+          onClick={onCancel}
+          title="Return to the mode list"
+        >
+          Back
         </PhButton>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -499,6 +549,15 @@ function ModeEditor({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
+          <PhButton
+            size="sm"
+            variant="ghost"
+            icon={<I.chevL size={12} />}
+            onClick={onCancel}
+            title="Discard unsaved changes and return to the mode list"
+          >
+            Back
+          </PhButton>
           <h3 className="m-0 text-[14px] font-semibold text-fg-strong truncate">
             {isNew ? 'New mode' : `${locked ? 'Configure' : 'Edit'} · ${mode.name || mode.id}`}
           </h3>
@@ -532,16 +591,6 @@ function ModeEditor({
         </Field>
       )}
 
-      {!locked && (
-        <Field label="Tags (comma-separated)">
-          <PhInput
-            value={mode.tags}
-            onChange={(v) => onChange({ ...mode, tags: v })}
-            placeholder="writing, casual"
-          />
-        </Field>
-      )}
-
       <Field label="System prompt">
         <textarea
           value={mode.sys}
@@ -557,7 +606,14 @@ function ModeEditor({
           }}
           placeholder="You are a senior code reviewer. Focus on…"
         />
+        <span className="text-[11px] text-fg-dim mt-1">
+          Use{' '}
+          <code className="ph-mono text-[10.5px]">{`{{variable_name}}`}</code> for
+          placeholders. Set their default values just below — every run uses them.
+        </span>
       </Field>
+
+      <VariablesEditor mode={mode} onChange={onChange} />
 
       <div className="grid grid-cols-3 gap-3">
         <Field label="Temperature">
@@ -721,6 +777,108 @@ function ModeEditor({
         </PhButton>
       </div>
     </div>
+  );
+}
+
+/** Regex matching `{{ident}}` placeholders. Identifier must start with
+ *  a letter or `_`, then any number of alphanumerics / underscores —
+ *  the rules MUST match the Rust `extract_names` in
+ *  services/prompt_template.rs or the UI will show variables the backend
+ *  doesn't substitute. */
+const PLACEHOLDER_RE = /\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
+
+function extractPlaceholders(prompt: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of prompt.matchAll(PLACEHOLDER_RE)) {
+    const name = m[1];
+    if (!seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+function parseVarsJson(s: string): Record<string, string> {
+  try {
+    const v = JSON.parse(s);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const out: Record<string, string> = {};
+      for (const [k, val] of Object.entries(v)) {
+        out[k] = typeof val === 'string' ? val : String(val ?? '');
+      }
+      return out;
+    }
+  } catch {}
+  return {};
+}
+
+/**
+ * Renders one input row per `{{variable}}` discovered in the mode's
+ * system prompt. The user types the default value once; every run of
+ * this mode (via hotkey, dashboard, or per-connection override) gets
+ * the placeholder substituted at call time on the Rust side. Editing
+ * the prompt to add a new placeholder automatically grows this section
+ * to include it (and removing a placeholder strips its stored value on
+ * the next save by virtue of only rendering rows for present names).
+ */
+function VariablesEditor({
+  mode,
+  onChange,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+}) {
+  const placeholders = useMemo(() => extractPlaceholders(mode.sys), [mode.sys]);
+  if (placeholders.length === 0) return null;
+  const current = parseVarsJson(mode.variables);
+  const setValue = (name: string, value: string) => {
+    const next = { ...current, [name]: value };
+    // Don't persist keys for placeholders that no longer exist in the
+    // prompt — keeps the JSON tidy and the editor predictable.
+    const filtered: Record<string, string> = {};
+    for (const k of placeholders) {
+      filtered[k] = next[k] ?? '';
+    }
+    onChange({ ...mode, variables: JSON.stringify(filtered) });
+  };
+  return (
+    <Field label="Variable defaults">
+      <div
+        className="rounded-md p-3 flex flex-col gap-2"
+        style={{
+          background: 'var(--bg-2)',
+          border: '.5px solid var(--border)',
+        }}
+      >
+        {placeholders.map((name) => (
+          <div key={name} className="flex items-center gap-2.5">
+            <code
+              className="ph-mono text-[11.5px] px-2 py-1 rounded flex-shrink-0"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--accent)',
+                border: '.5px solid var(--accent-tint-2)',
+                minWidth: 110,
+              }}
+              title={`Placeholder {{${name}}} in the prompt above`}
+            >
+              {`{{${name}}}`}
+            </code>
+            <PhInput
+              value={current[name] ?? ''}
+              onChange={(v) => setValue(name, v)}
+              placeholder={`default value for ${name}`}
+            />
+          </div>
+        ))}
+        <span className="text-[11px] text-fg-dim mt-0.5">
+          Every run substitutes these values into the prompt. Leave blank to send an
+          empty string. Delete the placeholder from the prompt to remove a row.
+        </span>
+      </div>
+    </Field>
   );
 }
 

@@ -5,6 +5,8 @@ pub mod catalog_service;
 pub mod connection_service;
 pub mod history_service;
 pub mod prompt_service;
+pub mod pricing;
+pub mod prompt_template;
 pub mod settings_service;
 pub mod shortcut_service;
 

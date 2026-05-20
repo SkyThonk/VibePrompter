@@ -21,7 +21,7 @@ impl HistoryRepo {
         // Within favorites or non-favorites, newest-first.
         let items: Vec<HistoryItem> = sqlx::query_as(
             "SELECT id, mode_name, icon_name, provider_label, source_text, output_text,
-                    latency_ms, favorite, created_at, input_tokens, output_tokens
+                    latency_ms, favorite, created_at, input_tokens, output_tokens, cost_micros
              FROM history
              ORDER BY favorite DESC, created_at DESC, id DESC
              LIMIT ?1 OFFSET ?2",
@@ -40,8 +40,8 @@ impl HistoryRepo {
         let id = sqlx::query(
             "INSERT INTO history
                (mode_name, icon_name, provider_label, source_text, output_text, latency_ms,
-                created_at, input_tokens, output_tokens)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                created_at, input_tokens, output_tokens, cost_micros)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .bind(&item.mode_name)
         .bind(&item.icon_name)
@@ -52,6 +52,7 @@ impl HistoryRepo {
         .bind(now)
         .bind(item.input_tokens)
         .bind(item.output_tokens)
+        .bind(item.cost_micros)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
@@ -83,6 +84,29 @@ impl HistoryRepo {
         Ok(affected)
     }
 
+    /// Aggregate cost over windows for the dashboard widget. Returns
+    /// (month_micros, week_micros, total_micros, month_priced_runs, month_unpriced_runs).
+    pub async fn cost_summary(
+        &self,
+        month_cutoff_rfc3339: &str,
+        week_cutoff_rfc3339: &str,
+    ) -> AppResult<(i64, i64, i64, i64, i64)> {
+        let row: (i64, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT
+               COALESCE(SUM(CASE WHEN created_at >= ?1 THEN cost_micros ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN created_at >= ?2 THEN cost_micros ELSE 0 END), 0),
+               COALESCE(SUM(cost_micros), 0),
+               COALESCE(SUM(CASE WHEN created_at >= ?1 AND cost_micros > 0 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN created_at >= ?1 AND cost_micros = 0 THEN 1 ELSE 0 END), 0)
+             FROM history",
+        )
+        .bind(month_cutoff_rfc3339)
+        .bind(week_cutoff_rfc3339)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Delete history rows older than the given RFC3339 timestamp.
     pub async fn purge_older_than(&self, cutoff_rfc3339: &str) -> AppResult<u64> {
         let affected = sqlx::query("DELETE FROM history WHERE created_at < ?1")
@@ -109,6 +133,7 @@ mod tests {
             latency_ms: 1200,
             input_tokens: 0,
             output_tokens: 0,
+            cost_micros: 0,
         }
     }
 

@@ -34,7 +34,11 @@ export function PhButton({
   const variants = {
     primary: {
       bg: hover ? 'var(--accent-deep)' : 'var(--accent)',
-      color: '#1a0f2e',
+      // White text reads cleanly against every accent (violet, blue, green,
+      // amber, rose, mono-dark in light theme). The previous near-black text
+      // worked on light pastels but looked muddy on the default dark theme's
+      // saturated accent.
+      color: '#ffffff',
       border: '.5px solid transparent',
       shadow: hover
         ? '0 0 0 1px var(--accent-deep), 0 0 18px rgba(167,139,250,0.35)'

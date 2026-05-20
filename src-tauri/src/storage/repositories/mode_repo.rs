@@ -23,7 +23,7 @@ impl ModeRepo {
     pub async fn list(&self) -> AppResult<Vec<PromptMode>> {
         let modes: Vec<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
-                    provider_override, icon_name, tags,
+                    provider_override, icon_name, variables,
                     CAST(enabled AS INTEGER) AS enabled,
                     CAST(is_system AS INTEGER) AS is_system
              FROM prompt_modes ORDER BY sort_order ASC",
@@ -37,7 +37,7 @@ impl ModeRepo {
     pub async fn get(&self, id: &str) -> AppResult<PromptMode> {
         let mode: Option<PromptMode> = sqlx::query_as(
             "SELECT id, name, description, system_prompt, temperature, max_tokens,
-                    provider_override, icon_name, tags,
+                    provider_override, icon_name, variables,
                     CAST(enabled AS INTEGER) AS enabled,
                     CAST(is_system AS INTEGER) AS is_system
              FROM prompt_modes WHERE id = ?1",
@@ -51,37 +51,39 @@ impl ModeRepo {
     pub async fn upsert(&self, mode: &PromptMode, sort_order: i64) -> AppResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
         // System modes are locked: callers can change the prompt + sampling +
-        // pinned provider + enabled, but the name, description, icon, tags,
-        // and is_system flag are preserved from the stored row. We detect the
-        // existing row by id so a brand-new user mode is unaffected.
-        let existing: Option<(String, String, String, String, i64)> = sqlx::query_as(
-            "SELECT name, description, icon_name, tags, CAST(is_system AS INTEGER)
+        // pinned provider + enabled, but the name, description, and icon are
+        // preserved from the stored row along with the is_system flag. We
+        // detect the existing row by id so a brand-new user mode is unaffected.
+        let existing: Option<(String, String, String, i64)> = sqlx::query_as(
+            "SELECT name, description, icon_name, CAST(is_system AS INTEGER)
              FROM prompt_modes WHERE id = ?1",
         )
         .bind(&mode.id)
         .fetch_optional(&self.pool)
         .await?;
-        let (name, description, icon_name, tags) = match &existing {
-            Some((n, d, i, t, is_sys)) if *is_sys != 0 => {
-                (n.clone(), d.clone(), i.clone(), t.clone())
+        let (name, description, icon_name) = match &existing {
+            Some((n, d, i, is_sys)) if *is_sys != 0 => {
+                (n.clone(), d.clone(), i.clone())
             }
             _ => (
                 mode.name.clone(),
                 mode.description.clone(),
                 mode.icon_name.clone(),
-                mode.tags.clone(),
             ),
         };
+        // `sort_order` is set only on INSERT; the UPDATE branch leaves it
+        // alone so re-saving a mode doesn't reset the user's chosen position.
+        // Reordering goes through `swap_sort_order` instead.
         sqlx::query(
             "INSERT INTO prompt_modes
                (id, name, description, system_prompt, temperature, max_tokens,
-                provider_override, icon_name, tags, is_default, sort_order,
+                provider_override, icon_name, variables, is_default, sort_order,
                 enabled, is_system, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, 0, ?12, ?12)
              ON CONFLICT(id) DO UPDATE SET
                name = ?2, description = ?3, system_prompt = ?4,
                temperature = ?5, max_tokens = ?6, provider_override = ?7,
-               icon_name = ?8, tags = ?9, sort_order = ?10, enabled = ?11,
+               icon_name = ?8, variables = ?9, enabled = ?11,
                updated_at = ?12",
         )
         .bind(&mode.id)
@@ -92,7 +94,7 @@ impl ModeRepo {
         .bind(mode.max_tokens)
         .bind(&mode.provider_override)
         .bind(&icon_name)
-        .bind(&tags)
+        .bind(&mode.variables)
         .bind(sort_order)
         .bind(mode.enabled as i64)
         .bind(now)
@@ -119,6 +121,45 @@ impl ModeRepo {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// Atomically swap the `sort_order` of two modes. Used by the reorder
+    /// controls in the Modes settings panel. Both modes must exist; if one
+    /// doesn't, the swap is a no-op and the caller's reorder request is
+    /// silently dropped (the UI should never offer to swap with a missing
+    /// neighbor — the affordance is hidden at list boundaries).
+    pub async fn swap_sort_order(&self, id_a: &str, id_b: &str) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
+        let a: Option<(i64,)> =
+            sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
+                .bind(id_a)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let b: Option<(i64,)> =
+            sqlx::query_as("SELECT sort_order FROM prompt_modes WHERE id = ?1")
+                .bind(id_b)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let (Some((sa,)), Some((sb,))) = (a, b) else {
+            tx.rollback().await.ok();
+            return Ok(());
+        };
+        if sa == sb {
+            tx.rollback().await.ok();
+            return Ok(());
+        }
+        sqlx::query("UPDATE prompt_modes SET sort_order = ?1 WHERE id = ?2")
+            .bind(sb)
+            .bind(id_a)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE prompt_modes SET sort_order = ?1 WHERE id = ?2")
+            .bind(sa)
+            .bind(id_b)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 

@@ -178,6 +178,7 @@ impl ConnectionService {
             // ConnectionRow we hand back from save() to redact for the UI.
             last_used_at: String::new(),
             notes: input.notes.clone(),
+            tags: input.tags.clone(),
         };
 
         self.repo.upsert(&row).await?;
@@ -209,6 +210,7 @@ impl ConnectionService {
                     "isDefault": r.is_default,
                     "extraHeaders": r.extra_headers,
                     "notes": r.notes,
+                    "tags": r.tags,
                 })
             })
             .collect();
@@ -287,6 +289,11 @@ impl ConnectionService {
                 last_used_at: String::new(),
                 notes: item
                     .get("notes")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                tags: item
+                    .get("tags")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -469,6 +476,7 @@ fn redact(row: ConnectionRow) -> ConnectionInfo {
         extra_headers: row.extra_headers,
         last_used_at: row.last_used_at,
         notes: row.notes,
+        tags: row.tags,
     }
 }
 

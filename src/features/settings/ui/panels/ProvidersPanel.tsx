@@ -27,6 +27,7 @@ interface Connection {
   extraHeaders: string;
   lastUsedAt: string;
   notes: string;
+  tags: string;
 }
 
 interface ConnectionDraft {
@@ -39,6 +40,7 @@ interface ConnectionDraft {
   isDefault: boolean;
   extraHeaders: string;
   notes: string;
+  tags: string;
 }
 
 const PRESETS: Record<string, { label: string; baseUrl: string; kind: 'openai' | 'anthropic'; model: string }> = {
@@ -65,12 +67,14 @@ const emptyDraft = (): ConnectionDraft => ({
   isDefault: false,
   extraHeaders: '',
   notes: '',
+  tags: '',
 });
 
 export function ProvidersPanel() {
   const toast = useToast();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConnectionDraft | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -79,6 +83,11 @@ export function ProvidersPanel() {
   // works, etc.). Inline keeps Save context next to the editor.
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
+  // Connection editor's secondary fields (custom headers, notes) start
+  // collapsed. They auto-expand when editing an existing connection that
+  // already has values in them, so users with notes/headers see them
+  // immediately rather than thinking the data is lost.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const reload = () =>
     invokeCommand<Connection[]>('list_connections')
@@ -275,10 +284,14 @@ export function ProvidersPanel() {
       isDefault: c.isDefault,
       extraHeaders: c.extraHeaders ?? '',
       notes: c.notes ?? '',
+      tags: c.tags ?? '',
     });
     setModels([]);
     setKeyVisible(false);
     setFeedback(null);
+    // Auto-open the Advanced section when editing a row that already has
+    // headers or notes — otherwise the user thinks their data is missing.
+    setAdvancedOpen(Boolean(c.extraHeaders?.trim() || c.notes?.trim()));
   };
 
   const presetEntries = useMemo(() => Object.entries(PRESETS), []);
@@ -348,7 +361,59 @@ export function ProvidersPanel() {
               )}
             </div>
           )}
-          {connections.map((c) => (
+          {connections.length > 1 && (() => {
+            const allTags = Array.from(
+              new Set(
+                connections
+                  .flatMap((c) => (c.tags ?? '').split(',').map((t) => t.trim()))
+                  .filter((t) => t.length > 0)
+              )
+            ).sort();
+            if (allTags.length === 0) return null;
+            return (
+              <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                <span className="text-[11px] text-fg-dim mr-1">Filter:</span>
+                <button
+                  type="button"
+                  onClick={() => setTagFilter(null)}
+                  className="text-[11px] px-2 py-1 rounded transition-colors"
+                  style={{
+                    background: tagFilter === null ? 'var(--accent-tint)' : 'var(--surface-2)',
+                    color: tagFilter === null ? 'var(--accent)' : 'var(--fg-mute)',
+                    border: `.5px solid ${tagFilter === null ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                    cursor: 'pointer',
+                  }}
+                >
+                  All ({connections.length})
+                </button>
+                {allTags.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTagFilter(t)}
+                    className="text-[11px] px-2 py-1 rounded transition-colors"
+                    style={{
+                      background: tagFilter === t ? 'var(--accent-tint)' : 'var(--surface-2)',
+                      color: tagFilter === t ? 'var(--accent)' : 'var(--fg)',
+                      border: `.5px solid ${tagFilter === t ? 'var(--accent-tint-2)' : 'var(--border)'}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+          {connections
+            .filter((c) => {
+              if (!tagFilter) return true;
+              return (c.tags ?? '')
+                .split(',')
+                .map((t) => t.trim())
+                .includes(tagFilter);
+            })
+            .map((c) => (
             <div
               key={c.id}
               className="rounded-lg p-4 flex items-center gap-3"
@@ -370,6 +435,13 @@ export function ProvidersPanel() {
                   <Pill>{c.kind}</Pill>
                   {c.isDefault && <Pill tone="accent">default</Pill>}
                   {!c.hasKey && <Pill tone="warn">no key</Pill>}
+                  {(c.tags ?? '')
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean)
+                    .map((t) => (
+                      <Pill key={t}>{t}</Pill>
+                    ))}
                 </div>
                 <div className="text-[11.5px] text-fg-dim mt-1 ph-mono truncate">
                   {c.baseUrl} · {c.defaultModel || '(no default model)'}{' '}
@@ -427,6 +499,7 @@ export function ProvidersPanel() {
                 setDraft(emptyDraft());
                 setKeyVisible(false);
                 setFeedback(null);
+                setAdvancedOpen(false); // new connection — clean state
               }}
             >
               Add connection
@@ -462,9 +535,20 @@ export function ProvidersPanel() {
           style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
         >
           <div className="flex items-center justify-between gap-2">
-            <h3 className="m-0 text-[14px] font-semibold text-fg-strong">
-              {draft.id ? 'Edit connection' : 'New connection'}
-            </h3>
+            <div className="flex items-center gap-2 min-w-0">
+              <PhButton
+                size="sm"
+                variant="ghost"
+                icon={<I.chevL size={12} />}
+                onClick={() => setDraft(null)}
+                title="Discard unsaved changes and return to the connection list"
+              >
+                Back
+              </PhButton>
+              <h3 className="m-0 text-[14px] font-semibold text-fg-strong truncate">
+                {draft.id ? 'Edit connection' : 'New connection'}
+              </h3>
+            </div>
             <span className="text-[11.5px] text-fg-dim">
               Quick start with a preset, then customize as needed.
             </span>
@@ -631,48 +715,90 @@ export function ProvidersPanel() {
             </div>
           </Field>
 
-          <Field label='Custom headers (JSON)'>
-            <textarea
-              value={draft.extraHeaders}
-              onChange={(e) => setDraft({ ...draft, extraHeaders: e.target.value })}
-              rows={3}
-              placeholder='{ "HTTP-Referer": "https://vibeprompter.app", "X-Title": "VibePrompter" }'
-              className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
-              style={{
-                background: 'var(--bg-2)',
-                border: '.5px solid var(--border-strong)',
-                color: 'var(--fg)',
-                fontFamily: 'var(--mono)',
-                minHeight: 64,
-              }}
+          <Field label="Tags (optional)">
+            <PhInput
+              value={draft.tags}
+              onChange={(v) => setDraft({ ...draft, tags: v })}
+              placeholder="work, personal, gpt"
             />
             <span className="text-[11px] text-fg-dim mt-1">
-              Sent with every request to this connection. Use for OpenRouter
-              attribution, corporate gateway tokens, or vendor-specific opt-ins.
+              Comma-separated. Helps filter the list when you have many connections.
             </span>
-            {draft.extraHeaders.trim() && !isValidJsonObject(draft.extraHeaders) && (
-              <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
-                Must be a JSON object with string values.
-              </span>
-            )}
           </Field>
 
-          <Field label="Notes (optional)">
-            <textarea
-              value={draft.notes}
-              onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-              rows={2}
-              placeholder="Rate limit reminders, account ownership, anything you'd want to see again."
-              className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
+          <div className="flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              className="flex items-center gap-2 text-left"
               style={{
-                background: 'var(--bg-2)',
-                border: '.5px solid var(--border-strong)',
-                color: 'var(--fg)',
-                fontFamily: 'var(--sans)',
-                minHeight: 50,
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                color: 'var(--fg-mute)',
               }}
-            />
-          </Field>
+              aria-expanded={advancedOpen}
+            >
+              <I.cog size={12} />
+              <span className="text-[11.5px] uppercase tracking-[0.10em] font-semibold">
+                Advanced
+              </span>
+              <span className="text-[11px] ph-mono">
+                {advancedOpen ? '− hide' : '+ show'}
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--fg-dim)' }}>
+                Custom headers · notes
+              </span>
+            </button>
+
+            {advancedOpen && (
+              <>
+                <Field label='Custom headers (JSON)'>
+                  <textarea
+                    value={draft.extraHeaders}
+                    onChange={(e) => setDraft({ ...draft, extraHeaders: e.target.value })}
+                    rows={3}
+                    placeholder='{ "HTTP-Referer": "https://vibeprompter.app", "X-Title": "VibePrompter" }'
+                    className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
+                    style={{
+                      background: 'var(--bg-2)',
+                      border: '.5px solid var(--border-strong)',
+                      color: 'var(--fg)',
+                      fontFamily: 'var(--mono)',
+                      minHeight: 64,
+                    }}
+                  />
+                  <span className="text-[11px] text-fg-dim mt-1">
+                    Sent with every request to this connection. Use for OpenRouter
+                    attribution, corporate gateway tokens, or vendor-specific opt-ins.
+                  </span>
+                  {draft.extraHeaders.trim() && !isValidJsonObject(draft.extraHeaders) && (
+                    <span className="text-[11px] mt-1" style={{ color: 'var(--danger)' }}>
+                      Must be a JSON object with string values.
+                    </span>
+                  )}
+                </Field>
+
+                <Field label="Notes (optional)">
+                  <textarea
+                    value={draft.notes}
+                    onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                    rows={2}
+                    placeholder="Rate limit reminders, account ownership, anything you'd want to see again."
+                    className="w-full text-[12.5px] resize-y rounded-md px-3 py-2 outline-none"
+                    style={{
+                      background: 'var(--bg-2)',
+                      border: '.5px solid var(--border-strong)',
+                      color: 'var(--fg)',
+                      fontFamily: 'var(--sans)',
+                      minHeight: 50,
+                    }}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
 
           <label className="flex items-center gap-2 text-[12.5px] text-fg cursor-pointer">
             <input

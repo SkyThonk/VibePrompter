@@ -156,7 +156,10 @@ pub async fn run_prompt_stream(
         model: None,
         temperature: Some(mode.temperature),
         max_tokens: Some(mode.max_tokens as u32),
-        system: Some(mode.system_prompt.clone()),
+        system: Some(crate::services::prompt_template::render(
+            &mode.system_prompt,
+            &mode.variables,
+        )),
     };
 
     let token_event = format!("stream:{stream_id}:token");
@@ -200,6 +203,11 @@ pub async fn run_prompt_stream(
                 state.connections.mark_used(&row.id).await;
             }
             let provider_label = format!("{} · {}", row.label, r.model);
+            let cost_micros = crate::services::pricing::cost_micros(
+                &r.model,
+                r.usage.input_tokens as i64,
+                r.usage.output_tokens as i64,
+            );
             let _ = state
                 .history
                 .record(NewHistoryItem {
@@ -211,6 +219,7 @@ pub async fn run_prompt_stream(
                     latency_ms: r.latency_ms as i64,
                     input_tokens: r.usage.input_tokens as i64,
                     output_tokens: r.usage.output_tokens as i64,
+                    cost_micros,
                 })
                 .await;
             Ok(())

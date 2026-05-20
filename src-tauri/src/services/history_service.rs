@@ -33,6 +33,17 @@ impl HistoryService {
         self.repo.set_favorite(id, favorite).await
     }
 
+    /// Cost summary over last 7 / 30 days + lifetime. Returns the tuple
+    /// (month_micros, week_micros, total_micros, month_priced_runs,
+    /// month_unpriced_runs) — the command layer wraps this into the IPC
+    /// `CostSummary` shape.
+    pub async fn cost_summary(&self) -> AppResult<(i64, i64, i64, i64, i64)> {
+        let now = chrono::Utc::now();
+        let month_ago = (now - chrono::Duration::days(30)).to_rfc3339();
+        let week_ago = (now - chrono::Duration::days(7)).to_rfc3339();
+        self.repo.cost_summary(&month_ago, &week_ago).await
+    }
+
     /// Record a completed transformation. Used by sub-project 2.
     #[allow(dead_code)]
     pub async fn record(&self, item: NewHistoryItem) -> AppResult<i64> {
@@ -90,6 +101,7 @@ mod tests {
                 latency_ms: 900,
             input_tokens: 0,
             output_tokens: 0,
+            cost_micros: 0,
             })
             .await
             .unwrap();
@@ -132,6 +144,7 @@ mod tests {
             latency_ms: 900,
             input_tokens: 0,
             output_tokens: 0,
+            cost_micros: 0,
         }
     }
 
@@ -148,6 +161,7 @@ mod tests {
                 latency_ms: 900,
             input_tokens: 0,
             output_tokens: 0,
+            cost_micros: 0,
             })
             .await
             .unwrap();

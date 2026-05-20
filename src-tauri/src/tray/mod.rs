@@ -225,9 +225,11 @@ pub async fn rebuild_modes(app: &AppHandle) -> AppResult<()> {
         .try_state::<crate::app::state::AppState>()
         .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
     let modes = state.catalog.list_modes().await?;
+    // Mirror the filter in `app/setup.rs`: hide built-in modes from the tray
+    // submenu and cycle rotation. They're reached via dedicated shortcuts.
     let tray_modes: Vec<TrayMode> = modes
         .into_iter()
-        .filter(|m| m.enabled)
+        .filter(|m| m.enabled && !m.is_system)
         .map(|m| TrayMode { id: m.id, name: m.name, icon_name: Some(m.icon_name) })
         .collect();
     if tray_modes.is_empty() {

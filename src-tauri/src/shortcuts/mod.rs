@@ -111,8 +111,15 @@ fn dispatch(app: &AppHandle, action: &str) {
                     if needs_setup {
                         crate::tray::show_main_window(&app);
                         let _ = tauri::Emitter::emit(&app, "navigate", "/settings/providers");
+                        show_error_hud(&app, &msg);
+                    } else if msg.contains("no selection captured") {
+                        // Friendly, action-oriented HUD instead of a scary
+                        // error preview. Most common cause: user pressed
+                        // the hotkey before highlighting anything.
+                        show_no_selection_hud(&app);
+                    } else {
+                        show_error_hud(&app, &msg);
                     }
-                    show_error_hud(&app, &msg);
                 }
             });
         }
@@ -132,6 +139,21 @@ fn show_error_hud(app: &AppHandle, msg: &str) {
             mode_name: preview,
             icon_name: Some("info".into()),
             kicker: Some("Prompt failed".into()),
+        },
+    );
+}
+
+/// Friendly HUD for the "user pressed the hotkey but didn't select anything"
+/// case. Common enough on first-run that a raw error preview reads as a bug;
+/// a clear instruction tells the user what to do next.
+fn show_no_selection_hud(app: &AppHandle) {
+    let _ = crate::commands::overlay::show_mode_hud_internal(
+        app.clone(),
+        crate::commands::overlay::ModeHudArgs {
+            mode_id: "no-selection".into(),
+            mode_name: "Select some text first, then press the hotkey".into(),
+            icon_name: Some("text".into()),
+            kicker: Some("Nothing highlighted".into()),
         },
     );
 }

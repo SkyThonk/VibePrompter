@@ -68,10 +68,22 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .setup(|app| {
-            tauri::async_runtime::block_on(app::setup::initialize(app)).map_err(|err| {
-                tracing::error!("backend initialization failed: {err}");
-                Box::new(err) as Box<dyn std::error::Error>
-            })
+            let init = tauri::async_runtime::block_on(app::setup::initialize(app));
+            if let Err(e) = &init {
+                // Force-show the main window on initialization failure so the
+                // user isn't stuck with a "click app, nothing opens" experience.
+                // The main window is `visible: false` by default (so autostart
+                // doesn't flash a window) and is normally shown by the setup
+                // path on success — that path doesn't run when initialize
+                // errors out. Showing it here gives the user a window they can
+                // close, plus the log/error path stays the same.
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+                tracing::error!("backend initialization failed: {e}");
+            }
+            init.map_err(|err| Box::new(err) as Box<dyn std::error::Error>)
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
@@ -87,6 +99,7 @@ pub fn run() {
             commands::export_history,
             commands::count_history,
             commands::set_history_favorite,
+            commands::get_cost_summary,
             commands::export_connections,
             commands::import_connections,
             commands::list_shortcuts,
@@ -96,6 +109,7 @@ pub fn run() {
             commands::list_modes,
             commands::save_mode,
             commands::delete_mode,
+            commands::reorder_mode,
             commands::list_providers,
             commands::list_connections,
             commands::save_connection,
@@ -124,6 +138,8 @@ pub fn run() {
             commands::refine_accept,
             commands::refine_reject,
             commands::refine_retry,
+            commands::refine_followup,
+            commands::refine_switch_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

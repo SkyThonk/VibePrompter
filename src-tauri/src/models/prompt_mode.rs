@@ -20,9 +20,14 @@ pub struct PromptMode {
     pub provider_override: Option<String>,
     #[serde(rename = "iconName")]
     pub icon_name: String,
-    /// Comma-separated free-text tags. Empty string = untagged.
-    #[serde(default)]
-    pub tags: String,
+    /// JSON object string of `{ "var": "default_value" }`. Substituted
+    /// into `system_prompt` at call time wherever `{{var}}` appears.
+    /// Empty `{}` when the mode declares no variables. We keep this as
+    /// a serialized string at the model layer so it can flow through
+    /// serde + sqlx without bespoke types — the frontend and the
+    /// substitution helper parse it as JSON on demand.
+    #[serde(default = "default_variables")]
+    pub variables: String,
     /// Whether this mode appears in the tray menu, dashboard list, and the
     /// `cycle_mode` rotation. Disabled modes are still stored so the user can
     /// re-enable them later without losing their prompt + settings.
@@ -33,6 +38,10 @@ pub struct PromptMode {
     /// frontend cannot promote a user mode to system or vice versa.
     #[serde(rename = "isSystem", default)]
     pub is_system: bool,
+}
+
+fn default_variables() -> String {
+    "{}".to_string()
 }
 
 fn default_enabled() -> bool {

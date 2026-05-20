@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -39,6 +39,11 @@ export function RefineOverlay() {
   const [text, setText] = useState('');
   const [done, setDone] = useState<DonePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
+  const [conns, setConns] = useState<
+    Array<{ id: string; label: string; defaultModel: string; hasKey: boolean; isDefault: boolean }>
+  >([]);
+  const [activeConnId, setActiveConnId] = useState<string>('');
   const bufRef = useRef('');
   const flushPendingRef = useRef(false);
   // Set true while we're in the Accept handoff so the blur-to-dismiss
@@ -76,6 +81,14 @@ export function RefineOverlay() {
     };
   }, []);
 
+  // Fetch the connection catalog once so the model picker has options to
+  // show. Reset on every refine:reset (new session) so the picker doesn't
+  // remember last session's manual selection — each session starts back
+  // on the default / mode-pinned connection.
+  useEffect(() => {
+    invoke<typeof conns>('list_connections').then(setConns).catch(() => setConns([]));
+  }, []);
+
   // Apply backend theme + accent so this window matches the rest of the app.
   useEffect(() => {
     invoke<{ theme?: string; accent?: string }>('get_settings')
@@ -101,6 +114,7 @@ export function RefineOverlay() {
         bufRef.current = '';
         setDone(null);
         setError(null);
+        setActiveConnId(''); // new session — picker shows "Default / pinned"
         // Windows often refuses cross-process focus-steal on show(),
         // leaving the first click consumed by window activation. Pull
         // focus back into the webview as soon as the new session begins.
@@ -287,6 +301,56 @@ export function RefineOverlay() {
               {subtitle}
             </div>
           </div>
+          {conns.filter((c) => c.hasKey).length > 1 && (
+            <select
+              value={activeConnId}
+              onChange={(e) => {
+                const id = e.target.value;
+                if (!id) return;
+                setActiveConnId(id);
+                invoke('refine_switch_connection', { connId: id }).catch(() => {});
+              }}
+              disabled={streaming}
+              className="text-[10.5px] rounded px-1.5 py-0.5 outline-none"
+              style={{
+                background: 'var(--surface-2)',
+                border: '.5px solid var(--border)',
+                color: 'var(--fg-mute)',
+                cursor: streaming ? 'not-allowed' : 'pointer',
+                maxWidth: 140,
+              }}
+              title="Re-run through a different connection / model"
+            >
+              <option value="">
+                {activeConnId ? 'Switch model…' : 'Default / pinned'}
+              </option>
+              {conns
+                .filter((c) => c.hasKey)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+            </select>
+          )}
+          {!streaming && !error && done && !isSummarize && (
+            <button
+              type="button"
+              onClick={() => setShowDiff((v) => !v)}
+              className="text-[10.5px] px-1.5 py-0.5 rounded"
+              style={{
+                background: showDiff ? 'var(--accent-tint)' : 'var(--surface-2)',
+                color: showDiff ? 'var(--accent)' : 'var(--fg-mute)',
+                border: `.5px solid ${
+                  showDiff ? 'var(--accent-tint-2)' : 'var(--border)'
+                }`,
+                cursor: 'pointer',
+              }}
+              title="Highlight what changed vs the original selection"
+            >
+              {showDiff ? 'Diff on' : 'Diff'}
+            </button>
+          )}
           {streaming && (
             <span
               className="ph-pulse"
@@ -366,6 +430,23 @@ export function RefineOverlay() {
               <ThinkingLoader kind={kind} />
             )}
           </div>
+        ) : showDiff && meta?.selection ? (
+          <div
+            style={{
+              flex: 1,
+              overflow: 'auto',
+              padding: '12px 14px',
+              color: 'var(--fg-strong)',
+              fontSize: 13,
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              background: 'transparent',
+              fontFamily: 'var(--sans)',
+            }}
+          >
+            <DiffView original={meta.selection} updated={text} />
+          </div>
         ) : (
           <textarea
             value={text}
@@ -390,6 +471,14 @@ export function RefineOverlay() {
         )}
 
         {/* Footer / actions */}
+        {/* Follow-up input — only useful once we have a result the user can
+            ask us to refine. Pressing Enter fires `refine_followup` which
+            re-streams a new result into the same overlay. Esc clears the
+            field without triggering a follow-up. */}
+        {done && !error && !isSummarize && (
+          <FollowupBar onSend={(instruction) => invoke('refine_followup', { instruction })} />
+        )}
+
         <div
           style={{
             display: 'flex',
@@ -478,7 +567,7 @@ function btnStyle(
       padding: '5px 10px',
       borderRadius: 6,
       background: disabled ? 'var(--surface-2)' : 'var(--accent)',
-      color: disabled ? 'var(--fg-dim)' : '#1a0f2e',
+      color: disabled ? 'var(--fg-dim)' : '#ffffff',
       fontSize: 11.5,
       fontWeight: 600,
       border: '.5px solid transparent',
@@ -500,6 +589,217 @@ function btnStyle(
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
   };
+}
+
+/**
+ * Word-level diff highlighter. Splits both strings on whitespace +
+ * punctuation, runs a longest-common-subsequence pass, then renders
+ * removed runs with red strikethrough and inserted runs with green
+ * background. Lightweight (no dependency); accuracy is good enough for
+ * the typical refine output where ~80% of the text is unchanged.
+ */
+function DiffView({ original, updated }: { original: string; updated: string }) {
+  const segments = useMemo(() => diffWords(original, updated), [original, updated]);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === 'equal') {
+          return <span key={i}>{seg.text}</span>;
+        }
+        if (seg.kind === 'insert') {
+          return (
+            <span
+              key={i}
+              style={{
+                background: 'rgba(52, 211, 153, 0.18)',
+                color: 'var(--ok)',
+                borderRadius: 3,
+                padding: '0 2px',
+              }}
+            >
+              {seg.text}
+            </span>
+          );
+        }
+        return (
+          <span
+            key={i}
+            style={{
+              background: 'rgba(248, 113, 113, 0.12)',
+              color: 'var(--danger)',
+              textDecoration: 'line-through',
+              textDecorationThickness: '1.5px',
+              borderRadius: 3,
+              padding: '0 2px',
+            }}
+          >
+            {seg.text}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+interface DiffSeg {
+  kind: 'equal' | 'insert' | 'delete';
+  text: string;
+}
+
+/** Tokenize keeping whitespace + punctuation as their own tokens so the
+ *  diff doesn't collapse "hello," and "hello" into a "changed" segment
+ *  just because of trailing punctuation. */
+function tokenizePreservingWhitespace(s: string): string[] {
+  return s.split(/(\s+|[.,!?;:()"'`—–-])/).filter((x) => x.length > 0);
+}
+
+function diffWords(a: string, b: string): DiffSeg[] {
+  const ta = tokenizePreservingWhitespace(a);
+  const tb = tokenizePreservingWhitespace(b);
+  // Bail out on very long inputs — O(N*M) gets slow above ~10k tokens.
+  // Show the result as one insert; user can fall back to the textarea.
+  if (ta.length * tb.length > 4_000_000) {
+    return [{ kind: 'insert', text: b }];
+  }
+
+  // LCS DP. dp[i][j] = length of LCS of ta[0..i] + tb[0..j].
+  const n = ta.length;
+  const m = tb.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (ta[i - 1] === tb[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Walk back to emit segments, then merge adjacent same-kind runs so the
+  // rendered HTML doesn't fragment into hundreds of one-character spans.
+  const raw: DiffSeg[] = [];
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    if (ta[i - 1] === tb[j - 1]) {
+      raw.push({ kind: 'equal', text: ta[i - 1] });
+      i--;
+      j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      raw.push({ kind: 'delete', text: ta[i - 1] });
+      i--;
+    } else {
+      raw.push({ kind: 'insert', text: tb[j - 1] });
+      j--;
+    }
+  }
+  while (i > 0) {
+    raw.push({ kind: 'delete', text: ta[i - 1] });
+    i--;
+  }
+  while (j > 0) {
+    raw.push({ kind: 'insert', text: tb[j - 1] });
+    j--;
+  }
+  raw.reverse();
+  const merged: DiffSeg[] = [];
+  for (const seg of raw) {
+    const last = merged[merged.length - 1];
+    if (last && last.kind === seg.kind) {
+      last.text += seg.text;
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  return merged;
+}
+
+/**
+ * Tiny input bar that fires a multi-turn follow-up against the current
+ * refine session. Showing this only after `done` keeps the layout minimal
+ * while the model is streaming. Enter sends, Shift+Enter inserts a newline
+ * (so you can write a longer instruction without firing prematurely), Esc
+ * clears the field. The bar stays visible after sending — chains of
+ * follow-ups are explicit by design.
+ */
+function FollowupBar({ onSend }: { onSend: (instruction: string) => void }) {
+  const [value, setValue] = useState('');
+  const send = () => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    onSend(trimmed);
+    setValue('');
+  };
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 10px',
+        borderTop: '.5px solid var(--divider)',
+        background: 'var(--bg-2)',
+      }}
+    >
+      <I.wand size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            send();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setValue('');
+            (e.target as HTMLInputElement).blur();
+          }
+          // Stop propagation so the overlay's top-level keyboard handler
+          // doesn't see this Enter as "accept the result."
+          e.stopPropagation();
+        }}
+        placeholder="Tweak: make it shorter, more formal, …"
+        style={{
+          flex: 1,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: 'var(--fg)',
+          fontSize: 12.5,
+          fontFamily: 'var(--sans)',
+          padding: 0,
+          minWidth: 0,
+        }}
+      />
+      {value.trim() && (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            send();
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '3px 8px',
+            borderRadius: 5,
+            background: 'var(--accent)',
+            color: '#ffffff',
+            fontSize: 11,
+            fontWeight: 600,
+            border: '.5px solid transparent',
+            cursor: 'pointer',
+          }}
+          title="Send follow-up (Enter)"
+        >
+          Tweak
+        </button>
+      )}
+    </div>
+  );
 }
 
 /**

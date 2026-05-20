@@ -455,6 +455,8 @@ where
         }
     };
 
+    log_raw_req(cfg, "POST", &url, &body);
+
     // Retry the connection + 2xx-or-bust handshake. Once headers are
     // accepted we can't retry safely (we'd duplicate tokens already
     // emitted via `on_token`), so the retry boundary stops here.
@@ -582,6 +584,11 @@ where
             _ => {}
         }
     }
+
+    // Log the aggregated stream body when the user has opted into raw
+    // logging. We log 200 = success because we only reach this point on
+    // a 2xx; the actual status was already validated above.
+    log_raw_resp(cfg, 200, &text);
 
     Ok(CompletionResult {
         text,

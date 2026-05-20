@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { EmptyState, I, Kbd, PanelHead, PhButton, PhInput, Pill, useToast, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
@@ -15,7 +14,6 @@ const labelStyle: React.CSSProperties = {
 
 export function HistoryPanel() {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const toast = useToast();
   const [pageSize, setPageSize] = useState(50);
   const { data: history = [], isLoading } = useHistoryQuery(pageSize, 0);
@@ -23,15 +21,75 @@ export function HistoryPanel() {
   const [sel, setSel] = useState(1);
   const [clearing, setClearing] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [rerunBusy, setRerunBusy] = useState(false);
+  const [rerunResult, setRerunResult] = useState<{
+    text: string;
+    model: string;
+    latencyMs: number;
+    connId: string;
+  } | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const [conns, setConns] = useState<Array<{ id: string; label: string; defaultModel: string; hasKey: boolean }>>([]);
+  useEffect(() => {
+    invokeCommand<typeof conns>('list_connections').then(setConns).catch(() => {});
+  }, []);
 
-  const reuse = async (item: { src: string; mode: string }) => {
-    // Stash input for the dashboard textarea + try to re-activate the same
-    // mode the original run used. We look the mode up by *name* (the only
-    // identifier we stored on the history row) — if it's been renamed or
-    // deleted, the dashboard just runs with whatever's currently active.
+  const rerun = async (
+    src: string,
+    modeName: string,
+    connId: string
+  ): Promise<void> => {
+    setRerunBusy(true);
+    setRerunError(null);
+    setRerunResult(null);
     try {
-      sessionStorage.setItem('dashboard:input-stash', item.src);
-    } catch {}
+      // Best-effort: look up the mode by name to get its system prompt +
+      // sampling. If the mode was deleted since the original run, fall back
+      // to a neutral prompt so the re-run still produces something.
+      interface ModeShape {
+        id: string;
+        name: string;
+        sys?: string;
+        temp?: number;
+        maxTok?: number;
+      }
+      const modes = await invokeCommand<ModeShape[]>('list_modes');
+      const match = modes.find((m) => m.name === modeName);
+      const result = await invokeCommand<{
+        text: string;
+        model: string;
+        latencyMs: number;
+      }>('complete', {
+        id: connId,
+        messages: [{ role: 'user', content: src }],
+        params: {
+          system: match?.sys ?? '',
+          temperature: match?.temp ?? 0.5,
+          maxTokens: match?.maxTok ?? 1024,
+        },
+      });
+      setRerunResult({ ...result, connId });
+      queryClient.invalidateQueries({ queryKey: ['settings', 'history'] });
+    } catch (e) {
+      setRerunError(typeof e === 'string' ? e : String(e));
+    } finally {
+      setRerunBusy(false);
+    }
+  };
+
+  const copySource = async (item: { src: string; mode: string }) => {
+    // The dashboard no longer has a chat widget, so "Reuse" is now a
+    // clipboard copy of the original input. The user pastes it wherever
+    // they actually want to transform text (their email, IDE, etc.) and
+    // triggers the global hotkey. We also try to re-activate the same
+    // mode the original run used — falls back silently if the mode was
+    // renamed or deleted since.
+    try {
+      await navigator.clipboard.writeText(item.src);
+    } catch {
+      toast.err('Clipboard write blocked.', 'Could not copy');
+      return;
+    }
     try {
       const modes = await invokeCommand<{ id: string; name: string }[]>('list_modes');
       const match = modes.find((m) => m.name === item.mode);
@@ -39,8 +97,11 @@ export function HistoryPanel() {
         await invokeCommand<void>('set_active_mode', { id: match.id });
       }
     } catch {}
-    navigate('/');
-    toast.ok(`Loaded into dashboard${item.mode ? ` · ${item.mode} mode` : ''}.`);
+    toast.ok(
+      `Original input copied. Paste anywhere and press Ctrl+Alt+Space${
+        item.mode ? ` (${item.mode} mode)` : ''
+      }.`
+    );
   };
 
   const copyOutput = (text: string) => {
@@ -131,6 +192,11 @@ export function HistoryPanel() {
         x.out.toLowerCase().includes(q.toLowerCase()))
   );
   const current = history.find((x) => x.id === sel) ?? history[0];
+  // Selection changed → wipe any stale re-run result from the previous row.
+  useEffect(() => {
+    setRerunResult(null);
+    setRerunError(null);
+  }, [current?.id]);
 
   const head = (
     <PanelHead
@@ -331,12 +397,44 @@ export function HistoryPanel() {
             <PhButton
               size="sm"
               variant="ghost"
-              icon={<I.refresh size={12} />}
-              onClick={() => reuse({ src: current.src, mode: current.mode })}
-              title="Open the dashboard with this input pre-filled + the original mode active"
+              icon={<I.copy size={12} />}
+              onClick={() => copySource({ src: current.src, mode: current.mode })}
+              title="Copy the original input to your clipboard and activate the original mode, then paste + run the global hotkey wherever you want."
             >
-              Reuse
+              Copy source
             </PhButton>
+            <select
+              value=""
+              onChange={(e) => {
+                const id = e.target.value;
+                if (id) rerun(current.src, current.mode, id);
+              }}
+              disabled={rerunBusy || conns.filter((c) => c.hasKey).length === 0}
+              className="text-[11.5px] rounded px-2 py-1 outline-none"
+              style={{
+                background: 'var(--surface-2)',
+                border: '.5px solid var(--border)',
+                color: 'var(--fg)',
+                cursor: rerunBusy ? 'not-allowed' : 'pointer',
+              }}
+              title="Run this prompt again through a different connection / model"
+            >
+              <option value="">
+                {rerunBusy
+                  ? 'Re-running…'
+                  : conns.filter((c) => c.hasKey).length === 0
+                  ? 'No usable connections'
+                  : 'Re-run with…'}
+              </option>
+              {conns
+                .filter((c) => c.hasKey)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                    {c.defaultModel ? ` · ${c.defaultModel}` : ''}
+                  </option>
+                ))}
+            </select>
             <PhButton
               size="sm"
               variant="primary"
@@ -346,6 +444,63 @@ export function HistoryPanel() {
               Copy
             </PhButton>
           </div>
+
+          {(rerunResult || rerunError) && (
+            <div
+              className="rounded-md p-3 flex flex-col gap-1.5"
+              style={{
+                background: 'var(--bg-2)',
+                border: `.5px solid ${rerunError ? 'rgba(248,113,113,0.30)' : 'var(--accent-tint-2)'}`,
+              }}
+            >
+              <div className="flex items-center gap-2 text-[11px] ph-mono">
+                <span style={{ color: rerunError ? 'var(--danger)' : 'var(--accent)' }}>
+                  Re-run
+                </span>
+                {rerunResult && (
+                  <>
+                    <span className="text-fg-dim">·</span>
+                    <span className="text-fg-mute">{rerunResult.model}</span>
+                    <span className="text-fg-dim">·</span>
+                    <span className="text-fg-mute">{rerunResult.latencyMs}ms</span>
+                  </>
+                )}
+                <span className="flex-1" />
+                {rerunResult && (
+                  <button
+                    type="button"
+                    onClick={() => copyOutput(rerunResult.text)}
+                    className="text-[11px]"
+                    style={{ background: 'none', border: 'none', color: 'var(--fg-mute)', cursor: 'pointer' }}
+                  >
+                    Copy
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRerunResult(null);
+                    setRerunError(null);
+                  }}
+                  className="text-[11px]"
+                  style={{ background: 'none', border: 'none', color: 'var(--fg-mute)', cursor: 'pointer' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+              <pre
+                className="m-0 text-[12.5px] whitespace-pre-wrap break-words"
+                style={{
+                  color: rerunError ? 'var(--danger)' : 'var(--fg-strong)',
+                  fontFamily: 'var(--sans)',
+                  maxHeight: 200,
+                  overflow: 'auto',
+                }}
+              >
+                {rerunError ?? rerunResult?.text}
+              </pre>
+            </div>
+          )}
 
           <div>
             <div style={{ ...labelStyle, marginBottom: 6 }}>

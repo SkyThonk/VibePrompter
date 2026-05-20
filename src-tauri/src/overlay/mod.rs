@@ -90,6 +90,16 @@ pub struct RefineSession {
     /// Kind of refine session in flight. `retry` consults this so the
     /// rerun uses the same prompt/label the user originally launched with.
     pub kind: Mutex<Option<RefineKind>>,
+    /// Last completed result text. Populated when `run_stream` finishes
+    /// successfully, consumed by `followup` so the user can ask for a
+    /// tweak ("make it shorter", "more formal") that the model receives
+    /// alongside the original selection + the previous output.
+    pub last_result: Mutex<Option<String>>,
+    /// Optional per-session connection override. Set by the in-overlay
+    /// model picker; takes priority over the mode's `provider_override`
+    /// and the workspace default for the rest of this session. Cleared
+    /// when the overlay hides.
+    pub connection_override: Mutex<Option<String>>,
     /// Monotonic stream id. Bumped on every `begin` / `retry` / `reject`
     /// so the previous stream's still-arriving tokens can be detected as
     /// stale and dropped. Stops Retry from interleaving the prior run's
@@ -350,8 +360,20 @@ async fn run_stream(
         .builtin_prompt()
         .map(|s| s.to_string())
         .unwrap_or_else(|| mode.system_prompt.clone());
+    // Substitute `{{var}}` placeholders with values from the mode's
+    // saved defaults. Built-in prompts don't carry placeholders, so this
+    // is a no-op for Grammar/Summarize unless the user adds variables
+    // to a custom mode that the Rewrite hotkey is bound to.
+    let system_prompt = crate::services::prompt_template::render(&system_prompt, &mode.variables);
 
-    let resolved = mode.provider_override.clone().filter(|s| !s.is_empty());
+    // Connection priority: session override (user picked one mid-overlay)
+    // > mode's pinned provider > workspace default. Each step falls through
+    // to the next if empty.
+    let session_override = app
+        .try_state::<RefineSession>()
+        .and_then(|s| s.connection_override.lock().unwrap().clone());
+    let resolved = session_override
+        .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
     let row = match resolved.as_deref() {
         Some(id) => state.connections.get_row(id).await?,
         None => state
@@ -362,32 +384,92 @@ async fn run_stream(
     };
 
     let messages = vec![ChatMessage { role: "user".into(), content: selection.clone() }];
+    // Adaptive max_tokens: rewrite/grammar/tone modes produce output roughly
+    // proportional to input length, so if the user selected 10 KB of text the
+    // mode's static 1024 cap would truncate the response halfway through.
+    // We estimate input tokens (≈chars/4) and scale max_tokens up so the
+    // output has room. Summarize keeps its tight cap because output << input
+    // by design. Hard ceiling at 16k to stay within every vendor's window
+    // we ship a preset for; users with bigger contexts can raise the mode's
+    // own max_tokens (which sets the floor).
+    let estimated_input_tokens = (selection.chars().count() / 4) as i64;
+    let effective_max_tokens: i64 = match kind {
+        RefineKind::Summarize => mode.max_tokens,
+        _ => {
+            // 1.4× input headroom: same length back + room for the model to
+            // breathe slightly. The mode's configured value is the floor —
+            // users tuning for very short outputs still get what they asked.
+            let scaled = (estimated_input_tokens as f64 * 1.4).ceil() as i64;
+            mode.max_tokens.max(scaled).min(16_000)
+        }
+    };
+    if estimated_input_tokens > 8000 {
+        // Selections >~32 KB of text often hit context-window or rate-limit
+        // problems silently. Drop a debug log + a one-shot HUD warning so
+        // the user knows their request is unusually large.
+        tracing::warn!(
+            "refine: large selection (~{} tokens) — using max_tokens={}",
+            estimated_input_tokens,
+            effective_max_tokens
+        );
+        let _ = crate::commands::overlay::show_mode_hud_internal(
+            app.clone(),
+            crate::commands::overlay::ModeHudArgs {
+                mode_id: "large-selection".into(),
+                mode_name: format!(
+                    "~{}K tokens selected — may hit context limits",
+                    estimated_input_tokens / 1000
+                ),
+                icon_name: Some("info".into()),
+                kicker: Some("Large selection".into()),
+            },
+        );
+    }
     let params = CompletionParams {
         model: None,
         temperature: Some(mode.temperature),
-        max_tokens: Some(mode.max_tokens as u32),
+        max_tokens: Some(effective_max_tokens as u32),
         system: Some(system_prompt),
     };
 
     let cfg = state.connections.http_config().await;
     let _permit = state.connections.acquire_permit().await;
-    let app_for_tokens = app.clone();
-    let app_for_cancel = app.clone();
-    let result = crate::providers::complete_stream(
-        &row,
-        messages,
-        params,
-        &cfg,
-        move |delta| {
-            if is_current_stream(&app_for_tokens, seq) {
-                let _ = app_for_tokens.emit("refine:token", delta);
-            }
-        },
-        // Refine uses its seq-based supersession for cancel; if the user
-        // hits Retry, this stream becomes stale and the next chunk bails.
-        move || !is_current_stream(&app_for_cancel, seq),
-    )
-    .await?;
+    // Honor the user's Stream-AI-response preference. When streaming is off,
+    // call the blocking endpoint and emit the whole text as one delta so the
+    // overlay UI fills in once (rather than always animating token-by-token).
+    let stream_pref = state
+        .settings
+        .get()
+        .await
+        .map(|s| s.stream_response)
+        .unwrap_or(true);
+    let result = if stream_pref {
+        let app_for_tokens = app.clone();
+        let app_for_cancel = app.clone();
+        crate::providers::complete_stream(
+            &row,
+            messages,
+            params,
+            &cfg,
+            move |delta| {
+                if is_current_stream(&app_for_tokens, seq) {
+                    let _ = app_for_tokens.emit("refine:token", delta);
+                }
+            },
+            // Refine uses its seq-based supersession for cancel; if the user
+            // hits Retry, this stream becomes stale and the next chunk bails.
+            move || !is_current_stream(&app_for_cancel, seq),
+        )
+        .await?
+    } else {
+        let r = crate::providers::complete(&row, messages, params, &cfg).await?;
+        if is_current_stream(&app, seq) {
+            // One delta emission so the overlay's token-accumulator renders
+            // the full text without changing the frontend at all.
+            let _ = app.emit("refine:token", r.text.as_str());
+        }
+        r
+    };
 
     if !is_current_stream(&app, seq) {
         // We got back the final response from a stale stream — discard it
@@ -398,6 +480,11 @@ async fn run_stream(
     // whether this is the current stream — the request DID hit the wire.
     state.connections.mark_used(&row.id).await;
 
+    let cost_micros = crate::services::pricing::cost_micros(
+        &result.model,
+        result.usage.input_tokens as i64,
+        result.usage.output_tokens as i64,
+    );
     let _ = state
         .history
         .record(crate::models::NewHistoryItem {
@@ -409,13 +496,230 @@ async fn run_stream(
             latency_ms: result.latency_ms as i64,
             input_tokens: result.usage.input_tokens as i64,
             output_tokens: result.usage.output_tokens as i64,
+            cost_micros,
         })
         .await;
 
     if is_current_stream(&app, seq) {
+        // Cache the latest result on the session so `followup` can build a
+        // multi-turn conversation off of it. Stale stream results don't
+        // overwrite because we only do it on the current-stream branch.
+        if let Some(s) = app.try_state::<RefineSession>() {
+            *s.last_result.lock().unwrap() = Some(result.text.clone());
+        }
         let _ = app.emit("refine:done", &result);
     }
     Ok(())
+}
+
+/// Multi-turn refinement. The user types a free-form instruction
+/// ("make it shorter", "more formal", "translate to Spanish") and we
+/// re-fire the conversation as `[user: original, assistant: last_result,
+/// user: instruction]`. Result replaces the current overlay text. Chains
+/// across multiple followups because each new result is written back to
+/// `session.last_result`.
+pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Err(AppError::Validation("followup instruction is empty".into()));
+    }
+    let session = app
+        .try_state::<RefineSession>()
+        .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
+    let selection = session
+        .selection
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::Validation("no active refine session".into()))?;
+    let mode_id = session
+        .mode_id
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::Validation("no active refine session".into()))?;
+    let kind = session
+        .kind
+        .lock()
+        .unwrap()
+        .unwrap_or(RefineKind::Rewrite);
+    let prior = session
+        .last_result
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::Validation("no previous result to refine".into()))?;
+
+    let seq = session.stream_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = app.emit("refine:reset_text", ());
+
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) =
+            run_followup_stream(app_for_task.clone(), kind, mode_id, selection, prior, instruction, seq)
+                .await
+        {
+            if is_current_stream(&app_for_task, seq) {
+                let _ = app_for_task.emit("refine:error", e.to_string());
+            }
+        }
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_followup_stream(
+    app: AppHandle,
+    kind: RefineKind,
+    mode_id: String,
+    selection: String,
+    prior_result: String,
+    instruction: String,
+    seq: u64,
+) -> AppResult<()> {
+    let state = app
+        .try_state::<crate::app::state::AppState>()
+        .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
+    let modes = state.catalog.list_modes().await?;
+    let mode = modes
+        .iter()
+        .find(|m| m.id == mode_id)
+        .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
+        .clone();
+    let system_prompt = kind
+        .builtin_prompt()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| mode.system_prompt.clone());
+    // Substitute `{{var}}` placeholders with values from the mode's
+    // saved defaults. Built-in prompts don't carry placeholders, so this
+    // is a no-op for Grammar/Summarize unless the user adds variables
+    // to a custom mode that the Rewrite hotkey is bound to.
+    let system_prompt = crate::services::prompt_template::render(&system_prompt, &mode.variables);
+
+    // Connection priority: session override (user picked one mid-overlay)
+    // > mode's pinned provider > workspace default. Each step falls through
+    // to the next if empty.
+    let session_override = app
+        .try_state::<RefineSession>()
+        .and_then(|s| s.connection_override.lock().unwrap().clone());
+    let resolved = session_override
+        .or_else(|| mode.provider_override.clone().filter(|s| !s.is_empty()));
+    let row = match resolved.as_deref() {
+        Some(id) => state.connections.get_row(id).await?,
+        None => state
+            .connections
+            .get_default_row()
+            .await?
+            .ok_or_else(|| AppError::Validation("no default connection configured".into()))?,
+    };
+
+    let messages = vec![
+        ChatMessage { role: "user".into(), content: selection.clone() },
+        ChatMessage { role: "assistant".into(), content: prior_result },
+        ChatMessage { role: "user".into(), content: instruction.clone() },
+    ];
+    // Estimate based on selection + prior + instruction so followup output
+    // has the same generous ceiling as the initial run.
+    let estimated_input_tokens =
+        (selection.chars().count() / 4 + selection.chars().count() / 4 + 50) as i64;
+    let effective_max_tokens: i64 = match kind {
+        RefineKind::Summarize => mode.max_tokens,
+        _ => {
+            let scaled = (estimated_input_tokens as f64 * 1.4).ceil() as i64;
+            mode.max_tokens.max(scaled).min(16_000)
+        }
+    };
+    let params = CompletionParams {
+        model: None,
+        temperature: Some(mode.temperature),
+        max_tokens: Some(effective_max_tokens as u32),
+        system: Some(system_prompt),
+    };
+
+    let cfg = state.connections.http_config().await;
+    let _permit = state.connections.acquire_permit().await;
+    let stream_pref = state
+        .settings
+        .get()
+        .await
+        .map(|s| s.stream_response)
+        .unwrap_or(true);
+    let result = if stream_pref {
+        let app_for_tokens = app.clone();
+        let app_for_cancel = app.clone();
+        crate::providers::complete_stream(
+            &row,
+            messages,
+            params,
+            &cfg,
+            move |delta| {
+                if is_current_stream(&app_for_tokens, seq) {
+                    let _ = app_for_tokens.emit("refine:token", delta);
+                }
+            },
+            move || !is_current_stream(&app_for_cancel, seq),
+        )
+        .await?
+    } else {
+        let r = crate::providers::complete(&row, messages, params, &cfg).await?;
+        if is_current_stream(&app, seq) {
+            let _ = app.emit("refine:token", r.text.as_str());
+        }
+        r
+    };
+
+    state.connections.mark_used(&row.id).await;
+    let cost_micros = crate::services::pricing::cost_micros(
+        &result.model,
+        result.usage.input_tokens as i64,
+        result.usage.output_tokens as i64,
+    );
+    // Record the followup as its own history row. We keep the original
+    // selection as `source_text` (so the row is still useful as "what did I
+    // refine?") but prepend the user's instruction so the conversation is
+    // reconstructable from history alone. Mode name carries a `· tweak`
+    // suffix so the user can spot follow-ups vs initial runs at a glance.
+    let combined_source = format!("[Tweak: {instruction}]\n\n{selection}");
+    let _ = state
+        .history
+        .record(crate::models::NewHistoryItem {
+            mode_name: format!("{} · tweak", mode.name),
+            icon_name: mode.icon_name,
+            provider_label: format!("{} · {}", row.label, result.model),
+            source_text: combined_source,
+            output_text: result.text.clone(),
+            latency_ms: result.latency_ms as i64,
+            input_tokens: result.usage.input_tokens as i64,
+            output_tokens: result.usage.output_tokens as i64,
+            cost_micros,
+        })
+        .await;
+
+    if is_current_stream(&app, seq) {
+        if let Some(s) = app.try_state::<RefineSession>() {
+            *s.last_result.lock().unwrap() = Some(result.text.clone());
+        }
+        let _ = app.emit("refine:done", &result);
+    }
+    Ok(())
+}
+
+/// Switch the active session to a different connection mid-overlay (the
+/// "Run this against Claude instead" use case). Sets the override on the
+/// session and immediately re-fires the prompt — same logic as `retry`
+/// but the resolved connection now reads through the override.
+pub async fn switch_connection(app: AppHandle, conn_id: String) -> AppResult<()> {
+    let conn_id = conn_id.trim().to_string();
+    if conn_id.is_empty() {
+        return Err(AppError::Validation("connection id is empty".into()));
+    }
+    {
+        let session = app
+            .try_state::<RefineSession>()
+            .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
+        *session.connection_override.lock().unwrap() = Some(conn_id);
+    }
+    retry(app).await
 }
 
 pub async fn retry(app: AppHandle) -> AppResult<()> {
@@ -519,5 +823,7 @@ fn clear_session(app: &AppHandle) {
         *session.original_clipboard.lock().unwrap() = None;
         *session.selection.lock().unwrap() = None;
         *session.mode_id.lock().unwrap() = None;
+        *session.last_result.lock().unwrap() = None;
+        *session.connection_override.lock().unwrap() = None;
     }
 }

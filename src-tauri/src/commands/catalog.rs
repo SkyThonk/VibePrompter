@@ -39,3 +39,15 @@ pub async fn delete_mode(
     let _ = app.emit("modes_changed", ());
     Ok(())
 }
+
+#[tauri::command]
+pub async fn reorder_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    direction: String,
+) -> Result<(), AppError> {
+    state.catalog.reorder_mode(&id, &direction).await?;
+    let _ = app.emit("modes_changed", ());
+    Ok(())
+}

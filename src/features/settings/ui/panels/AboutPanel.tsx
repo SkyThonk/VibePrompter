@@ -112,6 +112,34 @@ export function AboutPanel() {
         </div>
       )}
 
+      <section
+        className="rounded-lg p-4 flex items-start gap-3"
+        style={{
+          background: 'var(--surface)',
+          border: '.5px solid var(--accent-tint-2)',
+        }}
+      >
+        <span
+          className="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0"
+          style={{
+            background: 'var(--accent-tint)',
+            color: 'var(--accent)',
+          }}
+        >
+          <I.info size={14} />
+        </span>
+        <div className="flex-1 min-w-0 text-[12px] text-fg-mute leading-relaxed">
+          <div className="text-[12.5px] font-semibold text-fg-strong mb-1">
+            Your data stays local
+          </div>
+          VibePrompter is fully offline-first. Nothing — settings, history, prompts,
+          analytics — leaves your machine except your prompts going to whichever LLM
+          vendor you configured (using <em>your</em> API key, billed by them, not us).
+          The counts above are computed from your local SQLite history. No telemetry
+          server. No accounts. Open-source so you can verify.
+        </div>
+      </section>
+
       <Section title="Storage">
         <Row
           label="Data directory"

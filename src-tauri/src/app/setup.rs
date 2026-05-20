@@ -68,10 +68,14 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     // Hydrate the tray's mode list from the catalog *before* moving `catalog`
     // into AppState. Falls back to a minimal default if the seed is missing
     // for any reason — better to ship a tray than silently disable OS pieces.
+    // Built-in (`is_system`) modes are filtered out — Grammar / Summarize have
+    // dedicated global shortcuts (Ctrl+Alt+G / Ctrl+Alt+S) that route straight
+    // to the refine overlay, so putting them in the tray submenu and cycle
+    // rotation would confuse users about what the active-mode rewrite does.
     let tray_modes: Vec<crate::tray::TrayMode> = match catalog.list_modes().await {
-        Ok(modes) if modes.iter().any(|m| m.enabled) => modes
+        Ok(modes) if modes.iter().any(|m| m.enabled && !m.is_system) => modes
             .into_iter()
-            .filter(|m| m.enabled)
+            .filter(|m| m.enabled && !m.is_system)
             .map(|m| crate::tray::TrayMode {
                 id: m.id,
                 name: m.name,

@@ -1,5 +1,6 @@
 //! History commands — thin IPC adapters over `HistoryService`.
 
+use serde::Serialize;
 use tauri::State;
 
 use crate::app::AppState;
@@ -31,6 +32,43 @@ pub async fn set_history_favorite(
     favorite: bool,
 ) -> Result<(), AppError> {
     state.history.set_favorite(id, favorite).await
+}
+
+#[derive(Debug, Serialize)]
+pub struct CostSummary {
+    /// Total micro-dollars spent in the last 30 days.
+    #[serde(rename = "monthMicros")]
+    pub month_micros: i64,
+    /// Total micro-dollars spent in the last 7 days.
+    #[serde(rename = "weekMicros")]
+    pub week_micros: i64,
+    /// Total micro-dollars across all kept history.
+    #[serde(rename = "totalMicros")]
+    pub total_micros: i64,
+    /// Number of runs in the last 30 days that have a non-zero cost (i.e.
+    /// the model had a pricing entry and the vendor reported usage).
+    #[serde(rename = "monthRunsPriced")]
+    pub month_runs_priced: i64,
+    /// Number of runs in the last 30 days with zero cost (local models /
+    /// unknown pricing). Lets the UI clarify "$X.XX from N priced runs;
+    /// M local runs not counted".
+    #[serde(rename = "monthRunsUnpriced")]
+    pub month_runs_unpriced: i64,
+}
+
+#[tauri::command]
+pub async fn get_cost_summary(
+    state: State<'_, AppState>,
+) -> Result<CostSummary, AppError> {
+    let (month_micros, week_micros, total_micros, priced, unpriced) =
+        state.history.cost_summary().await?;
+    Ok(CostSummary {
+        month_micros,
+        week_micros,
+        total_micros,
+        month_runs_priced: priced,
+        month_runs_unpriced: unpriced,
+    })
 }
 
 /// Export the entire history as JSON. Returned as a serde value the frontend

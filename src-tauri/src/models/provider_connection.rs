@@ -50,6 +50,9 @@ pub struct ConnectionInfo {
     #[serde(rename = "lastUsedAt")]
     pub last_used_at: String,
     pub notes: String,
+    /// Comma-separated free-text tags (e.g. "work,personal,gpt"). Used by
+    /// the Providers panel to filter / group the connection list.
+    pub tags: String,
 }
 
 /// Write DTO from the frontend. `apiKey` is optional on update — when absent
@@ -74,6 +77,8 @@ pub struct ConnectionInput {
     pub extra_headers: String,
     #[serde(default)]
     pub notes: String,
+    #[serde(default)]
+    pub tags: String,
 }
 
 /// A single message in a chat completion request — identical shape for both

@@ -140,6 +140,16 @@ pub async fn refine_retry(app: AppHandle) -> AppResult<()> {
     crate::overlay::retry(app).await
 }
 
+#[tauri::command]
+pub async fn refine_followup(app: AppHandle, instruction: String) -> AppResult<()> {
+    crate::overlay::followup(app, instruction).await
+}
+
+#[tauri::command]
+pub async fn refine_switch_connection(app: AppHandle, conn_id: String) -> AppResult<()> {
+    crate::overlay::switch_connection(app, conn_id).await
+}
+
 /// Hide the main window to the tray. The window can be re-shown via the
 /// global `Ctrl+Shift+Space` shortcut, the tray icon left-click, or the tray
 /// menu's "Show VibePrompter" item.
