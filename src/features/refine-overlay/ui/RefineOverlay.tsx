@@ -275,10 +275,18 @@ export function RefineOverlay() {
           background: 'var(--glass)',
           backdropFilter: 'blur(20px) saturate(160%)',
           WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-          border: '.5px solid var(--border-strong)',
+          border: '1px solid var(--border-strong)',
           borderRadius: 14,
-          boxShadow:
-            'var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.03), 0 0 60px rgba(167,139,250,0.10)',
+          // The card fills the entire window (no padding around it), so any
+          // outer drop-shadow / glow would be clipped against the rectangular
+          // window edge — producing a visible sharp seam at the rounded
+          // corners. Drop the outer shadow entirely; the transparent window
+          // already gives the "floating" feel, the border + backdrop blur do
+          // the rest. `isolation: isolate` keeps the card on its own
+          // compositing layer so the corner anti-aliasing renders cleanly
+          // without bleeding into whatever's behind the window.
+          boxShadow: 'none',
+          isolation: 'isolate',
           overflow: 'hidden',
         }}
       >

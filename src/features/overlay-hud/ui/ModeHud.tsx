@@ -127,10 +127,14 @@ export function ModeHud() {
           background: 'var(--glass)',
           backdropFilter: 'blur(20px) saturate(160%)',
           WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-          border: '.5px solid var(--border-strong)',
+          border: '1px solid var(--border-strong)',
           borderRadius: 14,
-          boxShadow:
-            'var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.03), 0 0 60px rgba(167,139,250,0.10)',
+          // Tight shadow only — large outer glows get clipped by the
+          // rectangular transparent window edge, producing a sharp seam
+          // at the rounded corners. 12px blur stays comfortably within
+          // the window bounds even when the HUD card is full-width.
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
+          isolation: 'isolate',
         }}
       >
         <span
