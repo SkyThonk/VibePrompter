@@ -87,7 +87,7 @@ mod tests {
         let settings: Settings =
             serde_json::from_value(serde_json::Value::Object(map)).unwrap();
         assert!(settings.boot_start);
-        assert_eq!(settings.theme, "dark");
+        assert_eq!(settings.theme, "system");
         assert_eq!(settings.response_timeout, 30);
     }
 

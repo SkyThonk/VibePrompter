@@ -158,7 +158,7 @@ fn show_no_selection_hud(app: &AppHandle) {
         app.clone(),
         crate::commands::overlay::ModeHudArgs {
             mode_id: "no-selection".into(),
-            mode_name: "Select some text first, then press the hotkey".into(),
+            mode_name: "No text selected".into(),
             icon_name: Some("text".into()),
             kicker: Some("Nothing highlighted".into()),
             critical: true,

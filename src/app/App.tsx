@@ -51,7 +51,7 @@ export function App() {
   return (
     <AppProviders>
       <BackendThemeBridge />
-      <div className="flex flex-col h-screen overflow-hidden">
+      <div className="ph-root flex flex-col h-screen overflow-hidden">
         <WindowTitlebar icon={<AppIcon size="sm" />} />
         <div className="flex-1 min-h-0 overflow-auto">
           <AppRouter />

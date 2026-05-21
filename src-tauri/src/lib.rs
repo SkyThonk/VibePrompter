@@ -95,6 +95,7 @@ pub fn run() {
             commands::save_settings,
             commands::get_first_run_done,
             commands::mark_first_run_done,
+            commands::check_first_run,
             commands::get_kv,
             commands::set_kv,
             commands::export_settings,

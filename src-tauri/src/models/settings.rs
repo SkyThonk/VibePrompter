@@ -48,7 +48,7 @@ pub struct Settings {
 fn yes() -> bool { true }
 fn no() -> bool { false }
 fn default_timeout() -> u32 { 30 }
-fn default_theme() -> String { "dark".into() }
+fn default_theme() -> String { "system".into() }
 fn default_accent() -> String { "violet".into() }
 fn default_density() -> String { "regular".into() }
 fn default_retention() -> String { "30d".into() }
@@ -69,7 +69,7 @@ mod tests {
         let s = Settings::default();
         assert!(s.boot_start);
         assert_eq!(s.response_timeout, 30);
-        assert_eq!(s.theme, "dark");
+        assert_eq!(s.theme, "system");
         assert!(!s.quit_on_close);
     }
 }

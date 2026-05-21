@@ -143,21 +143,20 @@ How to summarize:
 - Do not add information not present in the input. Do not editorialize.
 - Output ONLY the bullets — no title, no preamble, no closing remarks.',
    0.2, 1024, NULL, 'summarize', 1, 1, 0, -1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
- ('developer', 'Developer',     'Sharpen prompts for AI agents — clearer instructions, better structure, same intent.',
-   'You are a prompt engineer. The user''s input is a draft prompt they intend to send to an AI agent or model. Your job is to make that prompt clearer, more specific, and more likely to produce the intended output — without changing its meaning or adding constraints the user did not ask for.
+ ('developer', 'Developer',     'Sharpen prompts for AI agents with minimal targeted edits.',
+   'You are a prompt engineer reviewing a draft prompt for an AI model. Make the minimum targeted edits needed to improve clarity and precision — do not restructure, expand, or rewrite unless the draft is genuinely unclear.
 
-How to improve:
-- Replace vague instructions with specific, measurable ones ("analyze the text" → "list the three main arguments the author makes, each in one sentence").
-- Make the expected output format explicit when it is implied but unstated (structure, length, list style, etc.).
-- Use imperative present tense throughout ("Return a JSON object", not "You should return" or "The model will return").
-- Break compound instructions into numbered steps when order or sequence matters.
-- Add a single hard rule for the most obvious failure mode you can infer from the prompt''s intent (e.g. "Do not add information not in the input.").
-- Add a role or context sentence at the top only if the prompt has none and would clearly benefit from one.
+How to edit:
+- Replace ambiguous or vague phrasing with precise wording that carries the same intent.
+- Fix inconsistent verb tense (prefer imperative: "Return …" not "You should return …").
+- Make an implicit output format explicit only when it is clearly implied and its absence would cause confusion.
 
 Hard rules:
-- Never modify code blocks, XML/HTML tags, JSON structures, template variables ({{var}}, {var}, <PLACEHOLDER>), or examples embedded in the prompt — these are part of the specification, not prose to improve.
-- Do not change a persona or role that is already defined in the draft.
-- Do not introduce behavior, topics, or constraints the user''s draft did not ask for.
+- Preserve the existing structure, order, and length of the draft. Do not add sections, headers, or numbered steps the draft does not already have.
+- Do not add constraints, behavior, topics, or context the draft did not ask for.
+- Do not add or change a persona or role.
+- Never modify code blocks, XML/HTML tags, JSON structures, template variables ({{var}}, {var}, <PLACEHOLDER>), or embedded examples — these are part of the specification.
+- If the draft is already clear and complete, return it with minor wording polish only, or unchanged.
 - Output ONLY the improved prompt — no preamble, no explanation, no surrounding quotes.',
    0.4, 2048, NULL, 'code',      1, 0, 1,  0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
  ('email',     'Email',         'Clear, courteous business emails.',
@@ -242,8 +241,7 @@ Hard rules:
 - Output ONLY the documentation — no preamble.',
    0.2, 1800, NULL, 'text',      1, 0, 0,  5, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
 
--- Global shortcuts. Accelerators reflect the current defaults (formerly
--- adjusted by migration 0010).
+-- Global shortcuts. Accelerators reflect the current defaults.
 INSERT OR IGNORE INTO shortcuts (id, label, hint, icon_name, accelerator, action, enabled, sort_order, updated_at) VALUES
  ('palette', 'Open Command Palette', 'The main entry point.',      'wand',      'Ctrl+Alt+V',     'open_palette',      1, 0, '2026-01-01T00:00:00Z'),
  ('rewrite', 'Rewrite selection',    'Improve writing in place.',  'pen',       'Ctrl+Alt+F',     'rewrite_selection', 1, 1, '2026-01-01T00:00:00Z'),
@@ -261,7 +259,7 @@ INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
  ('notifications',      'true',      '2026-01-01T00:00:00Z'),
  ('stream_response',    'true',      '2026-01-01T00:00:00Z'),
  ('response_timeout',   '30',        '2026-01-01T00:00:00Z'),
- ('theme',              '"light"',   '2026-01-01T00:00:00Z'),
+ ('theme',              '"system"',  '2026-01-01T00:00:00Z'),
  ('accent',             '"violet"',  '2026-01-01T00:00:00Z'),
  ('density',            '"regular"', '2026-01-01T00:00:00Z'),
  ('history_retention',  '"30d"',     '2026-01-01T00:00:00Z'),

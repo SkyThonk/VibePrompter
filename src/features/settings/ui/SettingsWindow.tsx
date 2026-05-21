@@ -118,16 +118,6 @@ export function SettingsWindow() {
               )}
               <div className="mt-auto px-2.5 py-2 text-[11px] text-fg-dim flex items-center gap-2">
                 <SaveIndicator saving={isSaving} />
-                <span className="flex-1" />
-                <button
-                  type="button"
-                  onClick={() => navigate('/settings/about')}
-                  className="ph-mono text-[11px]"
-                  style={{ background: 'none', border: 'none', color: 'var(--fg-dim)', cursor: 'pointer' }}
-                  title="Open About panel"
-                >
-                  About →
-                </button>
               </div>
             </aside>
             <main

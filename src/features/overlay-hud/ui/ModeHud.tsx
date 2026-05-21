@@ -113,6 +113,8 @@ export function ModeHud() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
+        padding: '0 12px',
+        boxSizing: 'border-box',
         background: 'transparent',
       }}
     >
@@ -135,6 +137,8 @@ export function ModeHud() {
           // the window bounds even when the HUD card is full-width.
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
           isolation: 'isolate',
+          maxWidth: '100%',
+          minWidth: 0,
         }}
       >
         <span

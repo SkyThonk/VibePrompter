@@ -7,7 +7,7 @@
   --surface:      #11131a;
   --surface-2:    #161922;
   --surface-3:    #1f2330;
-  --glass:        rgba(17, 19, 26, 0.78);
+  --glass:        rgba(17, 19, 26, 0.93);
 
   --fg-strong:    #f4f5f8;
   --fg:           #d8dbe3;
@@ -54,7 +54,7 @@
   --surface:      #ffffff;
   --surface-2:    #f0f1f4;
   --surface-3:    #e3e5eb;
-  --glass:        rgba(255, 255, 255, 0.78);
+  --glass:        rgba(255, 255, 255, 0.93);
 
   --fg-strong:    #0a0b0f;
   --fg:           #1c1f28;

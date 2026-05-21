@@ -152,10 +152,16 @@ function WindowKeyboardShortcuts() {
 }
 
 /**
- * On first launch, push the user into the onboarding flow once. We check the
- * persistent `first_run_done` KV in the backend and redirect / → /setup if
- * not yet done. The check runs only on the home route so deep links and tray
- * navigations are never intercepted.
+ * On first launch, push the user into the onboarding flow exactly once.
+ *
+ * The decision is made atomically on the backend via `check_first_run`: that
+ * single call both inspects the `first_run_done` KV and writes it back as
+ * `true`, so by the time the redirect fires the flag is already durable on
+ * disk. Closing the window from `/setup` — or any failure later in the flow
+ * — can no longer cause the onboarding to re-appear on the next launch.
+ *
+ * The check runs only on the home route so deep links and tray navigations
+ * are never intercepted.
  */
 function FirstRunGate() {
   const navigate = useNavigate();
@@ -166,9 +172,9 @@ function FirstRunGate() {
     if (checked.current) return;
     if (location.pathname !== '/') return;
     checked.current = true;
-    invokeCommand<boolean>('get_first_run_done')
-      .then((done) => {
-        if (!done) navigate('/setup', { replace: true });
+    invokeCommand<boolean>('check_first_run')
+      .then((shouldOnboard) => {
+        if (shouldOnboard) navigate('/setup', { replace: true });
       })
       .catch(() => {
         // Backend not available (browser preview) — assume onboarding needed.

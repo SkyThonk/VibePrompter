@@ -32,6 +32,27 @@ pub async fn mark_first_run_done(state: State<'_, AppState>) -> Result<(), AppEr
     state.settings.set_kv("first_run_done", "true").await
 }
 
+/// Atomic first-run decision: returns `true` exactly once per installation
+/// (the very first time it's called) and persists the flag in the same call
+/// so subsequent launches always return `false`.
+///
+/// Returns `false` for fresh installs whose data dir was carried over from a
+/// previous setup (any existing connection rows count as evidence onboarding
+/// happened already — self-heal in case the flag was never written).
+///
+/// Doing the read + write inside one backend call means the frontend can't
+/// loop onboarding even if the user kills the window the instant `/setup`
+/// renders: the flag is durable on disk *before* the redirect happens.
+#[tauri::command]
+pub async fn check_first_run(state: State<'_, AppState>) -> Result<bool, AppError> {
+    if state.settings.get_kv("first_run_done").await?.is_some() {
+        return Ok(false);
+    }
+    let has_connections = !state.connections.list().await?.is_empty();
+    state.settings.set_kv("first_run_done", "true").await?;
+    Ok(!has_connections)
+}
+
 /// Generic KV read/write — used by the frontend for ephemeral state that
 /// doesn't belong on the typed `Settings` aggregate (e.g. `last_route`).
 /// Whitelisted to a small key prefix so a compromised frontend can't write
