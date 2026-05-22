@@ -14,7 +14,7 @@
 //!      paste replaces the still-active selection in the source app, then
 //!      restores the user's original clipboard.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -105,22 +105,35 @@ pub struct RefineSession {
     /// stale and dropped. Stops Retry from interleaving the prior run's
     /// trailing tokens into the new buffer.
     pub stream_seq: AtomicU64,
+    /// Set to true while `begin` is executing (capture + show). A second
+    /// hotkey press arriving during the ~700ms capture window is dropped
+    /// rather than spawning a second overlapping capture.
+    pub begin_in_flight: AtomicBool,
 }
 
 pub fn init(app: &AppHandle) {
     app.manage(RefineSession::default());
 }
 
-fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<String> {
+fn capture_selection(app: &AppHandle) -> AppResult<String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+    // UIA path — reads the focused element's selection directly via
+    // IUIAutomationTextPattern without touching the clipboard at all.
+    // Falls back to Ctrl+C when UIA is unavailable or unsupported by the
+    // focused app (games, some Electron apps, custom renderers).
+    if let Some(text) = crate::platform::get_selected_text_uia() {
+        tracing::debug!("capture_selection: UIA ({} chars, zero clipboard touch)", text.len());
+        return Ok(text);
+    }
+    tracing::debug!("capture_selection: UIA unavailable or no selection — falling back to Ctrl+C");
+
     // Clear the clipboard before synthesizing Ctrl+C. We used to compare the
-    // post-copy clipboard against `prior` to detect "did the copy actually
-    // succeed?", but that false-negatived whenever the user's clipboard
-    // already contained the same string they were selecting (e.g. they just
-    // pasted it). Clearing first means *any* non-empty text afterward is
-    // proof of capture. `prior` is still passed in so the higher-level flow
-    // can restore it after Accept/Reject.
+    // post-copy clipboard against the prior value to detect success, but that
+    // false-negatived when the user's clipboard already contained the same
+    // string they were selecting. Clearing first means any non-empty text
+    // afterward is proof of capture. The caller stores `prior` in the session
+    // so Accept/Reject can restore it exactly once when the overlay closes.
     let _ = app.clipboard().write_text(String::new());
 
     // Wait long enough for the user to have physically released the hotkey
@@ -157,10 +170,7 @@ fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<Strin
 
     synth_copy(&mut enigo)?;
 
-    tracing::debug!(
-        "capture_selection: prior_clipboard_len={}, polling for non-empty text…",
-        prior.as_ref().map(|s| s.len()).unwrap_or(0)
-    );
+    tracing::debug!("capture_selection: clipboard cleared, polling for non-empty text…");
 
     // Clipboard was cleared above, so any non-empty text post-Ctrl+C is the
     // captured selection. Comparing against `prior` would false-negative when
@@ -198,9 +208,7 @@ fn capture_selection(app: &AppHandle, prior: &Option<String>) -> AppResult<Strin
         .map(|s| s.len() as i64)
         .unwrap_or(-1);
     tracing::warn!(
-        "capture_selection: both attempts produced no clipboard change \
-         (prior_len={}, last_seen_len={})",
-        prior.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
+        "capture_selection: both attempts produced no clipboard change (last_seen_len={})",
         last_seen
     );
     Err(AppError::Validation(
@@ -272,13 +280,36 @@ pub async fn begin(app: AppHandle, kind: RefineKind) -> AppResult<()> {
         }
     }
 
+    // Guard against a second hotkey press arriving while capture is still in
+    // progress (~700ms window). The flag is cleared on every exit path below
+    // via begin_inner so the next valid press always goes through.
+    {
+        let session = app
+            .try_state::<RefineSession>()
+            .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
+        if session.begin_in_flight.swap(true, Ordering::SeqCst) {
+            return Err(AppError::Validation(
+                "capture already in progress — wait a moment".into(),
+            ));
+        }
+    }
+
+    let result = begin_inner(app.clone(), kind).await;
+
+    if let Some(session) = app.try_state::<RefineSession>() {
+        session.begin_in_flight.store(false, Ordering::SeqCst);
+    }
+
+    result
+}
+
+async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
     let prior = app.clipboard().read_text().ok();
 
     // Run the blocking capture (multiple thread::sleep calls + enigo I/O) on
     // a dedicated blocking thread so the async runtime isn't starved.
     let app2 = app.clone();
-    let prior2 = prior.clone();
-    let capture_result = tokio::task::spawn_blocking(move || capture_selection(&app2, &prior2))
+    let capture_result = tokio::task::spawn_blocking(move || capture_selection(&app2))
         .await
         .map_err(|e| AppError::Config(format!("capture task panicked: {e}")))?;
 
@@ -818,8 +849,6 @@ pub async fn retry(app: AppHandle) -> AppResult<()> {
 }
 
 pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
-    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-
     let session = app
         .try_state::<RefineSession>()
         .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
@@ -834,30 +863,46 @@ pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
         .write_text(refined.clone())
         .map_err(|e| AppError::Validation(format!("write clipboard: {e}")))?;
 
-    std::thread::sleep(Duration::from_millis(140));
+    // All blocking work (sleeps + enigo I/O) runs on a dedicated blocking
+    // thread so the async runtime is not starved. The previous inline
+    // std::thread::sleep calls would block a tokio worker for ~220ms.
+    let app_clone = app.clone();
+    let spawn_result = tokio::task::spawn_blocking(move || -> AppResult<()> {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| AppError::Config(format!("enigo init: {e}")))?;
-    enigo
-        .key(Key::Control, Direction::Press)
-        .map_err(|e| AppError::Config(format!("ctrl press: {e}")))?;
-    enigo
-        .key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| AppError::Config(format!("v click: {e}")))?;
-    enigo
-        .key(Key::Control, Direction::Release)
-        .map_err(|e| AppError::Config(format!("ctrl release: {e}")))?;
+        // Wait for the source window to regain focus after the overlay hides.
+        std::thread::sleep(Duration::from_millis(140));
 
-    let app_for_restore = app.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        let mut enigo = Enigo::new(&Settings::default())
+            .map_err(|e| AppError::Config(format!("enigo init: {e}")))?;
+        enigo
+            .key(Key::Control, Direction::Press)
+            .map_err(|e| AppError::Config(format!("ctrl press: {e}")))?;
+        enigo
+            .key(Key::Unicode('v'), Direction::Click)
+            .map_err(|e| AppError::Config(format!("v click: {e}")))?;
+        enigo
+            .key(Key::Control, Direction::Release)
+            .map_err(|e| AppError::Config(format!("ctrl release: {e}")))?;
+
+        // Give the target app's message pump just enough time to process the
+        // paste before we overwrite the clipboard with the original content.
+        // 80ms covers virtually all apps; shorter than the previous 400ms
+        // async delay which left refined text in clipboard managers far longer.
+        std::thread::sleep(Duration::from_millis(80));
         if let Some(prior) = original {
-            let _ = app_for_restore.clipboard().write_text(prior);
+            let _ = app_clone.clipboard().write_text(prior);
         }
-    });
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Config(format!("accept task panicked: {e}")))
+    .and_then(|r| r);
 
+    // Always clear the session — even if paste failed, the overlay is already
+    // hidden and the session state would otherwise be permanently stale.
     clear_session(&app);
-    Ok(())
+    spawn_result
 }
 
 /// Copy-and-hide variant used by the Summarize flow's Copy button. Writes

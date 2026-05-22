@@ -1,9 +1,12 @@
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { Suspense, lazy, useEffect, useRef } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Changelog, CheatSheet, CommandPalette, LoadingSpinner } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 
+const StartupPage = lazy(() =>
+  import('@features/home').then((m) => ({ default: m.StartupPage }))
+);
 const HomePage = lazy(() =>
   import('@features/home/pages/HomePage').then((m) => ({ default: m.HomePage }))
 );
@@ -47,44 +50,15 @@ const AboutPanel = lazy(() =>
 );
 
 /**
- * Persist the current route so re-opening the main window lands the user
- * where they were. Stored as the `last_route` KV in the settings table.
- * Restoration is one-shot on mount; saves debounce by listening to route
- * changes via `useLocation`.
+ * Persist the current route so the StartupPage can restore it on the next
+ * launch or re-show. Skips `/` (the startup loader) and `/setup` (onboarding)
+ * so we never auto-return to either transient page.
  */
 function LastRouteMemory() {
-  const navigate = useNavigate();
   const location = useLocation();
-  const restored = useRef(false);
 
-  // One-shot restore — only after confirming onboarding is done so we don't
-  // race against FirstRunGate and navigate away from /setup.
   useEffect(() => {
-    if (restored.current) return;
-    if (location.pathname !== '/') return; // user deep-linked — don't override
-    restored.current = true;
-    invokeCommand<boolean>('get_first_run_done')
-      .then((done) => {
-        if (!done) return; // FirstRunGate will handle the redirect
-        return invokeCommand<string | null>('get_kv', { key: 'last_route' });
-      })
-      .then((raw) => {
-        if (!raw) return;
-        try {
-          const path = JSON.parse(raw) as unknown;
-          if (typeof path === 'string' && path.startsWith('/') && path !== '/') {
-            navigate(path, { replace: true });
-          }
-        } catch {
-          /* malformed — ignore */
-        }
-      })
-      .catch(() => {});
-  }, [navigate, location.pathname]);
-
-  // Persist on every navigation.
-  useEffect(() => {
-    if (location.pathname === '/setup') return; // never auto-return to onboarding
+    if (location.pathname === '/' || location.pathname === '/setup') return;
     invokeCommand<void>('set_kv', {
       key: 'last_route',
       value: JSON.stringify(location.pathname),
@@ -126,7 +100,7 @@ function WindowKeyboardShortcuts() {
       if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         if (location.pathname.startsWith('/settings')) {
-          navigate('/');
+          navigate('/app');
         } else {
           invokeCommand<void>('hide_main_window').catch(() => {});
         }
@@ -147,40 +121,6 @@ function WindowKeyboardShortcuts() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, location.pathname]);
-
-  return null;
-}
-
-/**
- * On first launch, push the user into the onboarding flow exactly once.
- *
- * The decision is made atomically on the backend via `check_first_run`: that
- * single call both inspects the `first_run_done` KV and writes it back as
- * `true`, so by the time the redirect fires the flag is already durable on
- * disk. Closing the window from `/setup` — or any failure later in the flow
- * — can no longer cause the onboarding to re-appear on the next launch.
- *
- * The check runs only on the home route so deep links and tray navigations
- * are never intercepted.
- */
-function FirstRunGate() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const checked = useRef(false);
-
-  useEffect(() => {
-    if (checked.current) return;
-    if (location.pathname !== '/') return;
-    checked.current = true;
-    invokeCommand<boolean>('check_first_run')
-      .then((shouldOnboard) => {
-        if (shouldOnboard) navigate('/setup', { replace: true });
-      })
-      .catch(() => {
-        // Backend not available (browser preview) — assume onboarding needed.
-        navigate('/setup', { replace: true });
-      });
-  }, [location.pathname, navigate]);
 
   return null;
 }
@@ -209,7 +149,6 @@ function BackendNavigationBridge() {
 export function AppRouter() {
   return (
     <Suspense fallback={<LoadingSpinner fullScreen />}>
-      <FirstRunGate />
       <LastRouteMemory />
       <WindowKeyboardShortcuts />
       <BackendNavigationBridge />
@@ -217,7 +156,8 @@ export function AppRouter() {
       <CheatSheet />
       <Changelog />
       <Routes>
-        <Route path="/" element={<HomePage />} />
+        <Route path="/" element={<StartupPage />} />
+        <Route path="/app" element={<HomePage />} />
         <Route path="/setup" element={<OnboardingPage />} />
 
         <Route path="/settings" element={<SettingsWindow />}>

@@ -13,6 +13,8 @@ mod services;
 mod storage;
 mod utils;
 
+mod platform;
+
 // Stub modules — populated by later sub-projects.
 mod clipboard;
 mod overlay;

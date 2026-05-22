@@ -39,7 +39,7 @@ pub async fn init(app: &AppHandle) -> AppResult<()> {
         );
     }
 
-    for item in items {
+    for item in &items {
         if !item.enabled {
             continue;
         }
@@ -62,7 +62,7 @@ pub async fn init(app: &AppHandle) -> AppResult<()> {
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            dispatch(app, &action);
+            dispatch_action(app, &action);
         }) {
             tracing::warn!("failed to register {id} ({accel}): {e}");
         } else {
@@ -70,13 +70,25 @@ pub async fn init(app: &AppHandle) -> AppResult<()> {
         }
     }
 
+    // On Windows, install/update the WH_KEYBOARD_LL priority hook so our
+    // combos are swallowed before any active app sees them. The hook is
+    // installed once and updated on every re-registration (Settings change).
+    let pairs: Vec<(String, String)> = items
+        .iter()
+        .filter(|i| i.enabled)
+        .map(|i| (i.accelerator.clone(), i.action.clone()))
+        .collect();
+    // First call installs the hook; subsequent calls (Settings re-registration)
+    // only update the combo list — the hook stays mounted.
+    crate::platform::install(app, pairs);
+
     Ok(())
 }
 
 /// Map a shortcut's `action` string to the corresponding backend behavior.
 /// Unknown actions are logged at debug level and do nothing — they exist as
 /// seeded rows for sub-project 2 to implement.
-fn dispatch(app: &AppHandle, action: &str) {
+pub(crate) fn dispatch_action(app: &AppHandle, action: &str) {
     match action {
         "mode_switch" => {
             if let Err(e) = crate::tray::cycle_mode(app) {

@@ -65,7 +65,7 @@ export function SetupScreen() {
     loader.show('Finishing setup...');
     try {
       await invokeCommand<void>('mark_first_run_done');
-      navigate('/');
+      navigate('/app');
     } catch (e) {
       toast.err(errorMessage(e), 'Could not save setup state');
     } finally {
@@ -105,7 +105,7 @@ export function SetupScreen() {
         `${saved.label} is set as your default connection.`,
         'You are all set'
       );
-      navigate('/');
+      navigate('/app');
     } catch (e) {
       const msg = errorMessage(e);
       setLastError(msg);

@@ -44,7 +44,7 @@ export function SettingsWindow() {
             >
               <button
                 type="button"
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/app')}
                 className="flex items-center gap-1.5 px-2 py-1.5 mx-1 mt-0.5 text-[12px] text-fg-mute hover:text-fg rounded transition-colors"
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
                 title="Back to home (Esc)"

@@ -509,9 +509,15 @@ mod tests {
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        // Navigate to the startup route before showing so the frontend
+        // re-evaluates routing (avoids stale /setup route after hide-to-tray).
+        let was_hidden = !window.is_visible().unwrap_or(true);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        if was_hidden {
+            let _ = tauri::Emitter::emit(app, "navigate", "/");
+        }
     }
 }
 
