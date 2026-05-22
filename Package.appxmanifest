@@ -14,10 +14,10 @@
   <Identity
     Name="SkyThonk.VibePrompter"
     Publisher="CN=SkyThonk"
-    Version="1.0.0" />
+    Version="1.0.0.0" />
 
   <Properties>
-    <DisplayName>SkyThonk.VibePrompter</DisplayName>
+    <DisplayName>VibePrompter</DisplayName>
     <PublisherDisplayName>SkyThonk</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -37,7 +37,7 @@
       uap10:TrustLevel="mediumIL"
       uap10:RuntimeBehavior="packagedClassicApp">
       <uap:VisualElements
-        DisplayName="SkyThonk.VibePrompter"
+        DisplayName="VibePrompter"
         Description="VibePrompter sits in your system tray and watches for global hotkeys. When you trigger one, it reads your selected text, runs it through your configured AI provider, and shows the result in a floating overlay directly above your cursor. Accept and it pastes back into the original app. Reject and nothing changes. You never switch windows."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\MedTile.png"
