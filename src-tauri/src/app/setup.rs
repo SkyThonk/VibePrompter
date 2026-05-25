@@ -360,9 +360,52 @@ fn apply_devtools(app: &AppHandle, want_open: bool) {
     }
 }
 
+/// Enable or disable the MSIX StartupTask declared in the app manifest.
+/// Returns Ok(()) if the WinRT StartupTask API is available (MSIX install).
+/// Returns Err if not packaged or the task ID isn't registered — in that case
+/// the caller falls back to the registry-based path.
+/// TaskId must match Package.appxmanifest / AppxManifest.xml.
+#[cfg(target_os = "windows")]
+fn msix_startup_set(enabled: bool) -> anyhow::Result<()> {
+    use windows::ApplicationModel::{StartupTask, StartupTaskState};
+    use windows::core::HSTRING;
+    let task = StartupTask::GetAsync(&HSTRING::from("VibePrompterStartup"))?.get()?;
+    if enabled {
+        let state = task.State()?;
+        if matches!(
+            state,
+            StartupTaskState::Disabled | StartupTaskState::DisabledByUser
+        ) {
+            task.RequestEnableAsync()?.get()?;
+        }
+    } else {
+        task.Disable()?;
+    }
+    Ok(())
+}
+
 /// Reconcile the OS autostart entry with the user's preference. Idempotent —
 /// safe to call on every settings change and at every boot.
 fn apply_autostart(app: &AppHandle, want_enabled: bool) {
+    // Store (MSIX) installs: registry autostart doesn't work because the
+    // executable lives in the protected WindowsApps folder and can't be
+    // launched by a raw path. Try the WinRT StartupTask API first; if it
+    // fails (not a packaged install, or task not registered in manifest),
+    // fall back to the registry-based tauri-plugin-autostart path.
+    #[cfg(target_os = "windows")]
+    match msix_startup_set(want_enabled) {
+        Ok(()) => {
+            tracing::info!(
+                "autostart {} (MSIX StartupTask)",
+                if want_enabled { "enabled" } else { "disabled" }
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::debug!("MSIX StartupTask not available ({e}), using registry autostart");
+        }
+    }
+
     use tauri_plugin_autostart::ManagerExt;
     let mgr = app.autolaunch();
     let is_enabled = mgr.is_enabled().unwrap_or(false);
