@@ -1,18 +1,31 @@
 //! Refine overlay — the headline UX.
 //!
 //! Flow on global hotkey:
-//!   1. Save current clipboard contents (we'll restore them at the end).
+//!   1. Save current clipboard contents (restored on Cancel/Reject only —
+//!      see the note on Accept below).
 //!   2. Synthesize Ctrl+C to copy the user's selection from whatever app
-//!      they were in.
+//!      they were in (skipped when UIA can read the selection directly).
 //!   3. Read the clipboard. If it's still our saved value (nothing was
 //!      selected, or the source app refused to copy), surface an error.
 //!   4. Open the `refine-overlay` window near the OS cursor.
 //!   5. Stream a completion through the active mode + default connection
 //!      (or the mode's pinned connection), pushing tokens into the overlay.
-//!   6. The overlay UI exposes Accept / Reject / Retry buttons. Accept
-//!      writes the result to the clipboard and synthesizes Ctrl+V so the
-//!      paste replaces the still-active selection in the source app, then
-//!      restores the user's original clipboard.
+//!   6. The overlay UI exposes Accept / Reject / Retry / Copy buttons.
+//!      Accept writes the refined text to the clipboard and synthesizes
+//!      Ctrl+V so the paste replaces the still-active selection in the
+//!      source app.
+//!
+//!      Accept deliberately does NOT restore the user's prior clipboard
+//!      afterwards. The previous design restored it ~80ms after Ctrl+V,
+//!      but many real targets (Excel, Word, browsers doing smart-paste
+//!      format negotiation) read the clipboard ASYNCHRONOUSLY hundreds
+//!      of milliseconds after the Ctrl+V message — the restore would
+//!      reliably beat their read, causing the prior clipboard contents
+//!      to be pasted instead of the refined text. Leaving refined on
+//!      the clipboard is race-free and matches the user's intent
+//!      (they explicitly chose Accept). Cancel/Reject still restores
+//!      the prior clipboard, because the user did NOT consent to
+//!      changing it in that branch.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -848,30 +861,69 @@ pub async fn retry(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+/// Result of the post-paste verification step in `accept`.
+enum PasteOutcome {
+    /// Either UIA confirmed the paste landed (selection changed) or UIA
+    /// couldn't be used to verify — in both cases we trust the paste and
+    /// restore the user's prior clipboard as usual.
+    Likely,
+    /// UIA reports the focused element's selection STILL matches what we
+    /// were supposed to replace — Ctrl+V did not land (Excel dropping
+    /// cell-edit mode on focus loss is the canonical trigger). Refined
+    /// text is left on the clipboard so the user can paste manually.
+    Failed,
+}
+
 pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
     let session = app
         .try_state::<RefineSession>()
         .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
-    let original = session.original_clipboard.lock().unwrap().clone();
+    // Snapshot the original selection text so the blocking task can compare
+    // it against the focused element's selection AFTER paste. Captured here
+    // because `clear_session` (below) wipes the session before the task
+    // result is observed.
+    let original_selection = session.selection.lock().unwrap().clone();
+    // NOTE: we intentionally do NOT capture session.original_clipboard for
+    // restore here. See the top-of-file docstring — accept leaves the
+    // refined text on the clipboard to avoid the post-paste restore race
+    // that caused "the wrong text from clipboard gets pasted" on apps
+    // that read the clipboard asynchronously after Ctrl+V (Excel, Word,
+    // smart-paste browsers).
 
     // Hide overlay BEFORE the paste so focus returns to the source window.
     if let Some(win) = app.get_webview_window("refine-overlay") {
         let _ = win.hide();
     }
 
+    // First write — primes the clipboard before the focus settle wait so
+    // any clipboard-history popup that pings on a clipboard change has
+    // already seen the final value by the time we hit Ctrl+V.
     app.clipboard()
         .write_text(refined.clone())
         .map_err(|e| AppError::Validation(format!("write clipboard: {e}")))?;
 
-    // All blocking work (sleeps + enigo I/O) runs on a dedicated blocking
-    // thread so the async runtime is not starved. The previous inline
-    // std::thread::sleep calls would block a tokio worker for ~220ms.
+    // All blocking work (sleeps + enigo I/O + UIA verification) runs on a
+    // dedicated blocking thread so the async runtime is not starved.
     let app_clone = app.clone();
-    let spawn_result = tokio::task::spawn_blocking(move || -> AppResult<()> {
+    let refined_for_task = refined.clone();
+    let spawn_result = tokio::task::spawn_blocking(move || -> AppResult<PasteOutcome> {
         use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-        // Wait for the source window to regain focus after the overlay hides.
-        std::thread::sleep(Duration::from_millis(140));
+        // 180ms (raised from 140ms): Excel and other heavy hosts can take
+        // measurably longer than a plain text box to become the real
+        // Ctrl+V target after the overlay hides. The added latency is
+        // imperceptible vs. the cost of a missed paste.
+        std::thread::sleep(Duration::from_millis(180));
+
+        // Pre-paste verification: another process (clipboard history,
+        // screenshot tool, AV scanner, an aggressive clipboard manager)
+        // can write to the clipboard between our initial write and the
+        // upcoming Ctrl+V. Read it back right before we paste and
+        // re-write if it doesn't match. One retry is enough to win
+        // against the common races without making accept feel laggy.
+        if let Err(e) = ensure_clipboard_text(&app_clone, &refined_for_task) {
+            tracing::warn!("pre-paste clipboard ensure failed: {e}");
+        }
 
         let mut enigo = Enigo::new(&Settings::default())
             .map_err(|e| AppError::Config(format!("enigo init: {e}")))?;
@@ -885,15 +937,41 @@ pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
             .key(Key::Control, Direction::Release)
             .map_err(|e| AppError::Config(format!("ctrl release: {e}")))?;
 
-        // Give the target app's message pump just enough time to process the
-        // paste before we overwrite the clipboard with the original content.
-        // 80ms covers virtually all apps; shorter than the previous 400ms
-        // async delay which left refined text in clipboard managers far longer.
-        std::thread::sleep(Duration::from_millis(80));
-        if let Some(prior) = original {
-            let _ = app_clone.clipboard().write_text(prior);
+        // Give the target app's message pump time to process the paste
+        // before we read the post-paste selection via UIA.
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Post-paste verification. If UIA can still read a selection AND
+        // it exactly matches the text we were supposed to replace, the
+        // paste did not happen — fire the failure HUD so the user knows
+        // they need to paste manually (the refined text is still on the
+        // clipboard because we no longer restore the prior one).
+        // When UIA returns None (focused element doesn't expose a text
+        // pattern) we can't verify and fall back to the optimistic path.
+        //
+        // Limitation: this catches "nothing replaced". It cannot detect
+        // "wrong target replaced" (e.g. focus shifted to a different
+        // element between hide and paste) — that would require knowing
+        // what the user intended, which we don't.
+        let paste_failed = match (
+            original_selection.as_deref(),
+            crate::platform::get_selected_text_uia(),
+        ) {
+            (Some(orig), Some(current)) => {
+                let o = orig.trim();
+                !o.is_empty() && current.trim() == o
+            }
+            _ => false,
+        };
+
+        if paste_failed {
+            tracing::warn!(
+                "refine accept: paste verification failed — focused element's selection still matches the original text. Refined text remains on clipboard for manual paste."
+            );
+            return Ok(PasteOutcome::Failed);
         }
-        Ok(())
+
+        Ok(PasteOutcome::Likely)
     })
     .await
     .map_err(|e| AppError::Config(format!("accept task panicked: {e}")))
@@ -902,7 +980,53 @@ pub async fn accept(app: AppHandle, refined: String) -> AppResult<()> {
     // Always clear the session — even if paste failed, the overlay is already
     // hidden and the session state would otherwise be permanently stale.
     clear_session(&app);
-    spawn_result
+
+    if matches!(spawn_result, Ok(PasteOutcome::Failed)) {
+        show_paste_failed_hud(&app);
+    }
+
+    spawn_result.map(|_| ())
+}
+
+/// Ensure the OS clipboard currently holds `expected`. Reads the clipboard
+/// once and re-writes if another process raced our previous write with
+/// content of its own. Used immediately before Ctrl+V in `accept` so the
+/// paste reliably picks up the refined text rather than whatever an
+/// aggressive clipboard manager / screenshot tool / AV scan dropped on
+/// top of it during the focus-settle window.
+fn ensure_clipboard_text(app: &AppHandle, expected: &str) -> AppResult<()> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    match app.clipboard().read_text() {
+        Ok(current) if current == expected => Ok(()),
+        other => {
+            tracing::debug!(
+                "ensure_clipboard_text: clipboard did not match expected (read_ok={}), rewriting",
+                other.is_ok()
+            );
+            app.clipboard()
+                .write_text(expected.to_string())
+                .map_err(|e| AppError::Validation(format!("rewrite clipboard: {e}")))
+        }
+    }
+}
+
+/// Critical HUD shown when post-paste verification detects that Ctrl+V did
+/// not land (Excel cell-edit fall-out being the canonical case). Tells the
+/// user the refined text is on their clipboard and what to do about it.
+/// Marked `critical` so it bypasses the notifications-off mute — silently
+/// dropping the refined text after the user pressed Accept would read as a
+/// broken feature.
+fn show_paste_failed_hud(app: &AppHandle) {
+    let _ = crate::commands::overlay::show_mode_hud_internal(
+        app.clone(),
+        crate::commands::overlay::ModeHudArgs {
+            mode_id: "paste-failed".into(),
+            mode_name: "Press Ctrl+V to paste".into(),
+            icon_name: Some("info".into()),
+            kicker: Some("Refined text is on your clipboard".into()),
+            critical: true,
+        },
+    );
 }
 
 /// Copy-and-hide variant used by the Summarize flow's Copy button. Writes

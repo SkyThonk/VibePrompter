@@ -604,6 +604,24 @@ export function RefineOverlay() {
                 <I.refresh size={12} />
                 Retry
               </button>
+              {/* Copy is a ghost secondary action — the explicit escape hatch
+                  when Replace's cross-process Ctrl+V is unreliable in the
+                  source app (most notably Excel, which can drop cell edit
+                  mode when focus shifts to the overlay). */}
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  if (!done || !text) return;
+                  e.preventDefault();
+                  copyAndHide();
+                }}
+                disabled={!done || !text}
+                title="Copy to clipboard"
+                style={btnStyle('ghost', !done || !text)}
+              >
+                <I.copy size={12} />
+                Copy
+              </button>
               <button
                 type="button"
                 onPointerDown={(e) => {
