@@ -6,14 +6,14 @@
   xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
-  IgnorableNamespaces="uap uap2 uap3 uap10 desktop desktop6">
+  IgnorableNamespaces="uap uap2 uap3 uap10 rescap desktop">
 
   <Identity
     Name="SkyThonk.VibePrompter"
     Publisher="CN=EBF73800-F696-40D8-AA94-92F325C9AC17"
-    Version="1.0.1.0"
+    Version="1.0.2.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
@@ -36,6 +36,11 @@
       EntryPoint="Windows.FullTrustApplication"
       uap10:TrustLevel="mediumIL"
       uap10:RuntimeBehavior="packagedClassicApp">
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="$targetnametoken$.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="VibePrompterStartup" Enabled="false" DisplayName="VibePrompter" />
+        </desktop:Extension>
+      </Extensions>
       <uap:VisualElements
         DisplayName="VibePrompter"
         Description="VibePrompter sits in your system tray and watches for global hotkeys. When you trigger one, it reads your selected text, runs it through your configured AI provider, and shows the result in a floating overlay directly above your cursor. Accept and it pastes back into the original app. Reject and nothing changes. You never switch windows."
@@ -44,11 +49,10 @@
         Square44x44Logo="Assets\AppList.png">
         <uap:DefaultTile Wide310x150Logo="Assets\WideTile.png" />
       </uap:VisualElements>
-      <Extensions>
-        <desktop:Extension Category="windows.startupTask" Executable="$targetnametoken$.exe" EntryPoint="Windows.FullTrustApplication">
-          <desktop:StartupTask TaskId="VibePrompterStartup" Enabled="false" DisplayName="VibePrompter" />
-        </desktop:Extension>
-      </Extensions>
     </Application>
   </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
 </Package>

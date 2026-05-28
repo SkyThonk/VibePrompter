@@ -1,6 +1,6 @@
 [package]
 name = "vibeprompter"
-version = "1.0.1"
+version = "1.0.2"
 description = "VibePrompter — a desktop app for refining and rewriting prompts with AI providers."
 authors = ["Akash Jaiswal"]
 license = "GPL-3.0-only"

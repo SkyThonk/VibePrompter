@@ -16,28 +16,13 @@ interface Entry {
 
 const ENTRIES: Entry[] = [
   {
-    version: '0.2.0',
-    date: '2026-05-18',
+    version: '1.0.2.0',
+    date: '2026-05-28',
     highlights: [
-      'New: Cmd+K command palette + Ctrl+/ keyboard cheat sheet.',
-      'New: mode templates gallery, tags + filter, preview tester.',
-      'New: connection notes, custom HTTP headers, last-used tracking.',
-      'New: history favorites + load-more pagination + j/k navigation.',
-      'New: settings global search across all panels.',
-      'New: in-flight request counter on the dashboard.',
-      'Polish: theme toggle on dashboard, About panel reveals data/log dirs.',
+      'Fix: Copy button in refine overlay for apps where Replace (Ctrl+V) is unreliable (e.g. Excel loses cell-edit mode on focus shift).',
+      'New Copy button beside Replace in Grammer and Mode Overlay'
     ],
-  },
-  {
-    version: '0.1.0',
-    date: '2026-05-14',
-    highlights: [
-      'First release: real OS tray, transparent refine overlay near the cursor.',
-      'Multi-vendor connections (OpenAI-compatible + Anthropic native).',
-      'API keys stored in OS keyring; analytics + health check.',
-      'History panel, mode editor, working settings end-to-end.',
-    ],
-  },
+  }
 ];
 
 export function Changelog() {
