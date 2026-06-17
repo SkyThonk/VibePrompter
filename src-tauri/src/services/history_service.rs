@@ -26,9 +26,20 @@ impl HistoryService {
         }
     }
 
-    /// List history newest-first.
+    /// List top-level history newest-first (tweaks are nested under their root
+    /// and fetched via `children_of`).
     pub async fn list(&self, query: HistoryQuery) -> AppResult<Vec<HistoryItem>> {
         self.repo.list(&query).await
+    }
+
+    /// Tweaks/followups belonging to a thread root, oldest-first.
+    pub async fn children_of(&self, parent_id: i64) -> AppResult<Vec<HistoryItem>> {
+        self.repo.children_of(parent_id).await
+    }
+
+    /// Every row including tweaks — for export, so a dump is complete.
+    pub async fn list_all(&self, query: HistoryQuery) -> AppResult<Vec<HistoryItem>> {
+        self.repo.list_all(&query).await
     }
 
     /// Delete all history; returns the number of rows removed. Fires
@@ -135,6 +146,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_micros: 0,
+                parent_id: None,
             })
             .await
             .unwrap();
@@ -177,6 +189,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_micros: 0,
+            parent_id: None,
         }
     }
 
@@ -194,6 +207,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_micros: 0,
+                parent_id: None,
             })
             .await
             .unwrap();

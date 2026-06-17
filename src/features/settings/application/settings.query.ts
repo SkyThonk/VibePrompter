@@ -23,6 +23,18 @@ export const useHistoryQuery = (limit = 50, offset = 0) =>
         query: { limit, offset },
       }),
   });
+/** Tweaks/followups nested under a history entry, oldest-first. Disabled
+    until an entry id is provided; returns [] for entries with no tweaks. */
+export const useHistoryChildrenQuery = (parentId: number | null) =>
+  useQuery({
+    queryKey: k('history-children', String(parentId ?? '')),
+    enabled: parentId != null,
+    queryFn: () =>
+      invokeCommand<import('../domain').HistoryItem[]>('get_history_children', {
+        parentId,
+      }),
+  });
+
 export const useShortcutsQuery = () =>
   useQuery({ queryKey: k('shortcuts'), queryFn: settingsApi.getShortcuts });
 

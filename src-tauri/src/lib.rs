@@ -108,6 +108,7 @@ pub fn run() {
             commands::export_settings,
             commands::import_settings,
             commands::get_history,
+            commands::get_history_children,
             commands::clear_history,
             commands::export_history,
             commands::export_history_to_file,

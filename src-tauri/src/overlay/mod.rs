@@ -42,12 +42,14 @@ use crate::utils::{AppError, AppResult};
 ///
 ///   - `Rewrite`   — uses the active prompt mode end-to-end; full action set
 ///                   (Cancel / Retry / Replace).
-///   - `Grammar`   — uses a fixed grammar-fix prompt regardless of active
+///   - `Grammar`   — loads its dedicated built-in `grammar` mode (prompt,
+///                   sampling, and pinned connection all editable in
+///                   Settings → Modes), independent of the active rewrite
 ///                   mode; same action set as Rewrite (you usually want to
 ///                   paste the corrected text back).
-///   - `Summarize` — uses a fixed summarization prompt; output is rendered as
-///                   bullets and the only commit action is Copy (we do not
-///                   paste a summary back over the source text).
+///   - `Summarize` — loads its dedicated built-in `summarize` mode; output is
+///                   rendered as bullets and the only commit action is Copy
+///                   (we do not paste a summary back over the source text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RefineKind {
@@ -73,24 +75,28 @@ impl RefineKind {
         }
     }
 
-    /// Built-in prompts for Grammar/Summarize so the action is consistent
-    /// regardless of which prompt mode the user happens to have active.
-    /// `Rewrite` returns None so the caller falls back to the active mode's
-    /// own system prompt + sampling.
-    fn builtin_prompt(self) -> Option<&'static str> {
+    /// The dedicated built-in prompt mode that backs this action. Grammar and
+    /// Summarize each have their own `is_system` mode (seeded in the schema
+    /// and editable in Settings → Modes) that owns their prompt, sampling, and
+    /// pinned connection. `Rewrite` has no dedicated mode — it runs whatever
+    /// mode is currently active end-to-end.
+    fn system_mode_id(self) -> Option<&'static str> {
         match self {
             RefineKind::Rewrite => None,
-            RefineKind::Grammar => Some(
-                "Fix grammar, punctuation, and spelling in the user's text. \
-                 Preserve meaning, tone, and language exactly. Reply with \
-                 ONLY the corrected text — no preamble, no explanation, no \
-                 quotes.",
-            ),
-            RefineKind::Summarize => Some(
-                "Summarize the user's text as a tight bulleted list of the \
-                 most important points. Use one short bullet per idea, each \
-                 line starting with `- `. No preamble, no closing remarks.",
-            ),
+            RefineKind::Grammar => Some("grammar"),
+            RefineKind::Summarize => Some("summarize"),
+        }
+    }
+
+    /// Resolve which prompt mode a refine session should load. Grammar and
+    /// Summarize always load their dedicated system mode so the connection,
+    /// sampling, and prompt the user configured on the built-in mode in
+    /// Settings take effect — independent of whichever rewrite mode happens
+    /// to be active. Rewrite follows the active mode.
+    fn resolve_mode_id(self, active_id: &str) -> String {
+        match self.system_mode_id() {
+            Some(id) => id.to_string(),
+            None => active_id.to_string(),
         }
     }
 }
@@ -108,6 +114,15 @@ pub struct RefineSession {
     /// tweak ("make it shorter", "more formal") that the model receives
     /// alongside the original selection + the previous output.
     pub last_result: Mutex<Option<String>>,
+    /// History row id of the initial refine for this session — the thread
+    /// root. Set when `run_stream` records its row; tweaks are recorded as
+    /// children of this id so the History panel can show them as one thread.
+    /// `None` until the first result is recorded (and after `clear_session`).
+    pub root_history_id: Mutex<Option<i64>>,
+    /// Tweak instructions applied so far this session, in order. Sent to the
+    /// model on each followup (as a preamble) so the refinement keeps the full
+    /// trajectory of what was asked, without resending intermediate outputs.
+    pub instructions: Mutex<Vec<String>>,
     /// Optional per-session connection override. Set by the in-overlay
     /// model picker; takes priority over the mode's `provider_override`
     /// and the workspace default for the rest of this session. Cleared
@@ -344,9 +359,14 @@ async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
     let session = app
         .try_state::<RefineSession>()
         .ok_or_else(|| AppError::Config("RefineSession not initialized".into()))?;
+    // Grammar/Summarize load their dedicated built-in mode (so the user's
+    // configured connection, sampling, and prompt take effect); Rewrite runs
+    // the currently active mode. The header still shows the action label for
+    // Grammar/Summarize — see `header_name` below.
+    let mode_id = kind.resolve_mode_id(&active.id);
     *session.original_clipboard.lock().unwrap() = prior;
     *session.selection.lock().unwrap() = Some(selection.clone());
-    *session.mode_id.lock().unwrap() = Some(active.id.clone());
+    *session.mode_id.lock().unwrap() = Some(mode_id.clone());
     *session.kind.lock().unwrap() = Some(kind);
 
     position_near_cursor(&app)?;
@@ -378,14 +398,13 @@ async fn begin_inner(app: AppHandle, kind: RefineKind) -> AppResult<()> {
         serde_json::json!({
             "selection": selection,
             "kind": kind,
-            "modeId": active.id,
+            "modeId": mode_id.clone(),
             "modeName": header_name,
             "iconName": header_icon,
         }),
     );
 
     let app_for_stream = app.clone();
-    let mode_id = active.id.clone();
     let sel = selection.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_stream(app_for_stream.clone(), kind, mode_id, sel, seq).await {
@@ -415,6 +434,14 @@ async fn run_stream(
         .try_state::<crate::app::state::AppState>()
         .ok_or_else(|| AppError::Config("AppState not initialized".into()))?;
 
+    // This is the base refine (initial run or Retry), i.e. a fresh thread root.
+    // Reset the thread state so tweaks attach to THIS run's history row and the
+    // followup conversation starts clean. The id is filled in after we record.
+    if let Some(s) = app.try_state::<RefineSession>() {
+        *s.root_history_id.lock().unwrap() = None;
+        s.instructions.lock().unwrap().clear();
+    }
+
     let modes = state.catalog.list_modes().await?;
     let mode = modes
         .iter()
@@ -422,17 +449,14 @@ async fn run_stream(
         .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
         .clone();
 
-    // Grammar/Summarize override the mode's prompt with a built-in but keep
-    // its sampling + pinned provider — so the user's preferred model still
-    // serves the built-in actions. Rewrite uses the mode's prompt unchanged.
-    let system_prompt = kind
-        .builtin_prompt()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| mode.system_prompt.clone());
-    // Substitute `{{var}}` placeholders with values from the mode's
-    // saved defaults. Built-in prompts don't carry placeholders, so this
-    // is a no-op for Grammar/Summarize unless the user adds variables
-    // to a custom mode that the Rewrite hotkey is bound to.
+    // `mode` is the dedicated grammar/summarize built-in for those actions
+    // (resolved in `begin_inner`) or the active mode for Rewrite, so the
+    // prompt, sampling, and pinned connection all come straight from the mode
+    // the user configured in Settings.
+    let system_prompt = mode.system_prompt.clone();
+    // Substitute `{{var}}` placeholders with values from the mode's saved
+    // defaults. The built-in grammar/summarize prompts carry no placeholders,
+    // so this is a no-op for them unless the user adds variables.
     let system_prompt = crate::services::prompt_template::render(&system_prompt, &mode.variables);
 
     // Connection priority: session override (user picked one mid-overlay)
@@ -569,7 +593,7 @@ async fn run_stream(
         RefineKind::Rewrite => (mode.name.clone(), mode.icon_name.clone()),
         other => (other.label().to_string(), other.icon().to_string()),
     };
-    if let Err(e) = state
+    match state
         .history
         .record(crate::models::NewHistoryItem {
             mode_name: history_mode_name,
@@ -581,10 +605,18 @@ async fn run_stream(
             input_tokens: result.usage.input_tokens as i64,
             output_tokens: result.usage.output_tokens as i64,
             cost_micros,
+            parent_id: None,
         })
         .await
     {
-        tracing::warn!("failed to record refine history: {e}");
+        // Remember this row as the thread root so subsequent tweaks attach
+        // to it as children rather than spawning disconnected entries.
+        Ok(id) => {
+            if let Some(s) = app.try_state::<RefineSession>() {
+                *s.root_history_id.lock().unwrap() = Some(id);
+            }
+        }
+        Err(e) => tracing::warn!("failed to record refine history: {e}"),
     }
 
     if is_current_stream(&app, seq) {
@@ -599,12 +631,32 @@ async fn run_stream(
     Ok(())
 }
 
+/// Build the final user turn for a followup. The model already sees the
+/// original selection and the latest result as the first two turns; this turn
+/// carries the new instruction plus — when earlier tweaks exist — a short
+/// preamble listing every prior instruction in order. That keeps the full
+/// refinement trajectory in context without resending intermediate outputs
+/// (the expensive part), and keeps roles strictly alternating so the request
+/// is valid for both OpenAI- and Anthropic-style APIs.
+fn build_followup_user_turn(prior_instructions: &[String], new_instruction: &str) -> String {
+    if prior_instructions.is_empty() {
+        return new_instruction.to_string();
+    }
+    let applied = prior_instructions
+        .iter()
+        .map(|i| format!("- {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("Already applied, in order:\n{applied}\n\nNow apply: {new_instruction}")
+}
+
 /// Multi-turn refinement. The user types a free-form instruction
-/// ("make it shorter", "more formal", "translate to Spanish") and we
-/// re-fire the conversation as `[user: original, assistant: last_result,
-/// user: instruction]`. Result replaces the current overlay text. Chains
-/// across multiple followups because each new result is written back to
-/// `session.last_result`.
+/// ("make it shorter", "more formal", "translate to Spanish") and we re-fire
+/// the conversation as `[user: original, assistant: last_result, user:
+/// instruction-with-history]`. Result replaces the current overlay text.
+/// Chains across multiple followups: each new result is written back to
+/// `session.last_result` and each instruction is appended to
+/// `session.instructions` so later tweaks carry the whole trajectory.
 pub async fn followup(app: AppHandle, instruction: String) -> AppResult<()> {
     let instruction = instruction.trim().to_string();
     if instruction.is_empty() {
@@ -673,14 +725,10 @@ async fn run_followup_stream(
         .find(|m| m.id == mode_id)
         .ok_or_else(|| AppError::NotFound { entity: "prompt_mode", id: mode_id.clone() })?
         .clone();
-    let system_prompt = kind
-        .builtin_prompt()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| mode.system_prompt.clone());
-    // Substitute `{{var}}` placeholders with values from the mode's
-    // saved defaults. Built-in prompts don't carry placeholders, so this
-    // is a no-op for Grammar/Summarize unless the user adds variables
-    // to a custom mode that the Rewrite hotkey is bound to.
+    let system_prompt = mode.system_prompt.clone();
+    // Substitute `{{var}}` placeholders with values from the mode's saved
+    // defaults. The built-in grammar/summarize prompts carry no placeholders,
+    // so this is a no-op for them unless the user adds variables.
     let system_prompt = crate::services::prompt_template::render(&system_prompt, &mode.variables);
 
     // Connection priority: session override (user picked one mid-overlay)
@@ -700,10 +748,18 @@ async fn run_followup_stream(
             .ok_or_else(|| AppError::Validation("no default connection configured".into()))?,
     };
 
+    // Prior tweak instructions applied so far (already reflected in
+    // `prior_result`). Listed back to the model so it keeps the full
+    // refinement trajectory; intermediate outputs are intentionally omitted.
+    let prior_instructions = app
+        .try_state::<RefineSession>()
+        .map(|s| s.instructions.lock().unwrap().clone())
+        .unwrap_or_default();
+    let user_turn = build_followup_user_turn(&prior_instructions, &instruction);
     let messages = vec![
         ChatMessage { role: "user".into(), content: selection.clone() },
         ChatMessage { role: "assistant".into(), content: prior_result },
-        ChatMessage { role: "user".into(), content: instruction.clone() },
+        ChatMessage { role: "user".into(), content: user_turn },
     ];
     // Estimate based on selection + prior + instruction so followup output
     // has the same generous ceiling as the initial run.
@@ -763,44 +819,46 @@ async fn run_followup_stream(
         row.price_input_per_m,
         row.price_output_per_m,
     );
-    // Record the followup as its own history row. We keep the original
-    // selection as `source_text` (so the row is still useful as "what did I
-    // refine?") but prepend the user's instruction so the conversation is
-    // reconstructable from history alone. Mode name carries a `· tweak`
-    // suffix so the user can spot follow-ups vs initial runs at a glance.
+    // Record the tweak as a CHILD of the thread root (the initial refine's
+    // row), so the History panel shows it nested under that refine instead of
+    // as a disconnected top-level entry. `source_text` is just the instruction
+    // — the turn label in the thread view; the original lives on the root.
     //
-    // Same kind-aware fix as `run_stream`: Grammar / Summarize follow-ups
-    // are tagged with the action the user actually performed, not the
-    // active rewrite mode they happen to have selected.
+    // Same kind-aware tagging as `run_stream`: Grammar / Summarize follow-ups
+    // reflect the action the user actually performed, not the active rewrite
+    // mode they happen to have selected.
     let (history_mode_name, history_icon) = match kind {
-        RefineKind::Rewrite => (
-            format!("{} · tweak", mode.name),
-            mode.icon_name.clone(),
-        ),
-        other => (
-            format!("{} · tweak", other.label()),
-            other.icon().to_string(),
-        ),
+        RefineKind::Rewrite => (mode.name.clone(), mode.icon_name.clone()),
+        other => (other.label().to_string(), other.icon().to_string()),
     };
-    let combined_source = format!("[Tweak: {instruction}]\n\n{selection}");
+    // Defensive: if the root id was never recorded (e.g. the initial run's
+    // history insert failed), fall back to a top-level row so the tweak isn't
+    // lost — it just won't be threaded.
+    let parent_id = app
+        .try_state::<RefineSession>()
+        .and_then(|s| *s.root_history_id.lock().unwrap());
     let _ = state
         .history
         .record(crate::models::NewHistoryItem {
             mode_name: history_mode_name,
             icon_name: history_icon,
             provider_label: format!("{} · {}", row.label, result.model),
-            source_text: combined_source,
+            source_text: instruction.clone(),
             output_text: result.text.clone(),
             latency_ms: result.latency_ms as i64,
             input_tokens: result.usage.input_tokens as i64,
             output_tokens: result.usage.output_tokens as i64,
             cost_micros,
+            parent_id,
         })
         .await;
 
     if is_current_stream(&app, seq) {
         if let Some(s) = app.try_state::<RefineSession>() {
             *s.last_result.lock().unwrap() = Some(result.text.clone());
+            // Append AFTER building this turn's preamble so the next tweak
+            // sees this instruction in its history.
+            s.instructions.lock().unwrap().push(instruction.clone());
         }
         let _ = app.emit("refine:done", &result);
     }
@@ -1073,5 +1131,55 @@ fn clear_session(app: &AppHandle) {
         *session.mode_id.lock().unwrap() = None;
         *session.last_result.lock().unwrap() = None;
         *session.connection_override.lock().unwrap() = None;
+        *session.root_history_id.lock().unwrap() = None;
+        session.instructions.lock().unwrap().clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grammar_and_summarize_have_dedicated_system_modes() {
+        assert_eq!(RefineKind::Grammar.system_mode_id(), Some("grammar"));
+        assert_eq!(RefineKind::Summarize.system_mode_id(), Some("summarize"));
+        assert_eq!(RefineKind::Rewrite.system_mode_id(), None);
+    }
+
+    #[test]
+    fn grammar_resolves_to_its_own_mode_not_the_active_rewrite_mode() {
+        // This is the bug: Grammar must load its dedicated `grammar` mode so
+        // the connection / sampling / prompt the user configured on the
+        // built-in Grammar mode in Settings actually take effect. Before the
+        // fix the action used whatever rewrite mode happened to be active,
+        // which is why a custom Grammar provider was ignored and the default
+        // connection was always used.
+        assert_eq!(RefineKind::Grammar.resolve_mode_id("email"), "grammar");
+        assert_eq!(RefineKind::Summarize.resolve_mode_id("email"), "summarize");
+        // Rewrite still follows the active mode end-to-end.
+        assert_eq!(RefineKind::Rewrite.resolve_mode_id("email"), "email");
+    }
+
+    #[test]
+    fn followup_turn_is_just_the_instruction_when_no_prior_tweaks() {
+        assert_eq!(
+            build_followup_user_turn(&[], "make it shorter"),
+            "make it shorter"
+        );
+    }
+
+    #[test]
+    fn followup_turn_lists_prior_instructions_in_order() {
+        let prior = vec!["make it formal".to_string(), "shorten the intro".to_string()];
+        let turn = build_followup_user_turn(&prior, "translate to Spanish");
+        assert_eq!(
+            turn,
+            "Already applied, in order:\n\
+             - make it formal\n\
+             - shorten the intro\n\
+             \n\
+             Now apply: translate to Spanish"
+        );
     }
 }
