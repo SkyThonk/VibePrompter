@@ -57,6 +57,9 @@ export interface HistoryItem {
   fav: boolean;
   inputTokens?: number;
   outputTokens?: number;
+  /** Thread root for tweaks: null/absent = a top-level refine; a number =
+      a tweak whose value is the originating refine's id. */
+  parentId?: number | null;
 }
 
 export interface ShortcutItem {

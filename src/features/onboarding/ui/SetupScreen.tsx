@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { I, PhButton, PhInput, useToast, AppIcon, useGlobalLoader } from '@shared/ui';
+import { I, PhButton, PhInput, useToast, AppIcon, useGlobalLoader, FreeKeyCallout, GetKeyLink } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { errorMessage } from '@shared/lib/utils';
 
@@ -60,11 +60,25 @@ export function SetupScreen() {
     setModel(p.defaultModel);
   };
 
+  const openUrl = (url: string) =>
+    invokeCommand<void>('open_url', { url }).catch((e) =>
+      toast.err(errorMessage(e), 'Could not open link')
+    );
+
+  // Arm the one-time "How it works" guide so the dashboard shows it on first
+  // load after setup. Best-effort — never block finishing on it.
+  const armGuide = () =>
+    invokeCommand<void>('set_kv', {
+      key: 'guide_after_onboarding',
+      value: JSON.stringify(true),
+    }).catch(() => {});
+
   const finishWithoutTest = async () => {
     setBusy(true);
     loader.show('Finishing setup...');
     try {
       await invokeCommand<void>('mark_first_run_done');
+      await armGuide();
       navigate('/app');
     } catch (e) {
       toast.err(errorMessage(e), 'Could not save setup state');
@@ -101,6 +115,7 @@ export function SetupScreen() {
       }
 
       await invokeCommand<void>('mark_first_run_done');
+      await armGuide();
       toast.ok(
         `${saved.label} is set as your default connection.`,
         'You are all set'
@@ -212,6 +227,8 @@ export function SetupScreen() {
             </div>
           </div>
 
+          <FreeKeyCallout onOpenUrl={openUrl} />
+
           <Field label="Label">
             <PhInput value={label} onChange={setLabel} placeholder={preset.label} />
           </Field>
@@ -248,10 +265,13 @@ export function SetupScreen() {
                 {keyVisible ? <I.eyeOff size={14} /> : <I.eye size={14} />}
               </button>
             </div>
-            <span className="text-[11.5px] text-fg-dim mt-1">
-              Stored in your OS keyring (Windows Credential Manager / Keychain / libsecret).
-              Never sent anywhere except {preset.label}.
-            </span>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <span className="text-[11.5px] text-fg-dim">
+                Stored in your OS keyring (Windows Credential Manager / Keychain / libsecret).
+                Never sent anywhere except {preset.label}.
+              </span>
+              <GetKeyLink providerId={preset.id} onOpenUrl={openUrl} />
+            </div>
           </Field>
         </section>
 

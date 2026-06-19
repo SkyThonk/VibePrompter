@@ -30,6 +30,10 @@ pub struct HistoryItem {
     /// (local model, missing usage from the vendor, or unrecognized model id).
     #[serde(rename = "costMicros")]
     pub cost_micros: i64,
+    /// Thread root for tweaks/followups. `None` = a top-level refine; `Some(id)`
+    /// = a tweak whose `id` points at the originating refine's row.
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<i64>,
 }
 
 /// Input for inserting a new history record (used by sub-project 2).
@@ -45,6 +49,8 @@ pub struct NewHistoryItem {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cost_micros: i64,
+    /// `None` for a top-level refine; `Some(root_id)` for a tweak/followup.
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

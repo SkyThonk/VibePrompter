@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { I, PanelHead, PhButton, PhInput } from '@shared/ui';
+import { Hint, I, PanelHead, PhButton, PhInput } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { errorMessage } from '@shared/lib/utils';
 import { blank, slugify, type ActiveMode, type Connection, type Mode, type Template } from './modes/types';
@@ -153,6 +153,21 @@ export function ModesPanel() {
         title="Prompt modes"
         hint="A mode bundles a system prompt + sampling settings. Pick one as the active mode (tray, hotkey, dashboard) and prompts run with these settings."
       />
+
+      {!draft && (
+        <Hint icon={<I.info size={13} />} tone="info">
+          The <b>active mode</b> is what your Rewrite hotkey (Ctrl+Alt+F) runs. Edit a
+          mode's system prompt to change <i>how</i> it rewrites — or create modes for
+          different jobs (a “formal email” one, a “concise” one) and switch between them.{' '}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new Event('app:show-guide'))}
+            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit' }}
+          >
+            See how it works →
+          </button>
+        </Hint>
+      )}
 
       {err && (
         <div

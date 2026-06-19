@@ -16,6 +16,17 @@ interface Entry {
 
 const ENTRIES: Entry[] = [
   {
+    version: '1.0.3.0',
+    date: '2026-06-19',
+    highlights: [
+      'New: a "How it works" guide explains the select → hotkey → overlay workflow, what Modes are, and how to customize prompts. Opens automatically after setup, and anytime from the dashboard, command palette (Ctrl+K), or cheat sheet.',
+      'Plus clearer in-app hints: how to get a free API key (Groq, Google AI Studio, OpenRouter), what the active Mode does, and what each shortcut triggers.',
+      'Fix: starting at Windows login now opens silently in the system tray instead of popping up the main window.',
+      'Fix: Grammar and Summary now respect their configured settings instead of falling back to defaults.',
+      'Tweaks and follow-ups now thread under their original refine in history, so the full conversation stays grouped together.',
+    ],
+  },
+  {
     version: '1.0.2.0',
     date: '2026-05-28',
     highlights: [

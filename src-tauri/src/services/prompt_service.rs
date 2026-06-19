@@ -115,6 +115,7 @@ impl PromptService {
                 input_tokens: result.usage.input_tokens as i64,
                 output_tokens: result.usage.output_tokens as i64,
                 cost_micros,
+                parent_id: None,
             })
             .await
         {
@@ -214,6 +215,7 @@ pub async fn run_with_row(
             input_tokens: result.usage.input_tokens as i64,
             output_tokens: result.usage.output_tokens as i64,
             cost_micros,
+            parent_id: None,
         })
         .await
     {

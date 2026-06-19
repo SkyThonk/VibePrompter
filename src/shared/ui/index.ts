@@ -18,6 +18,8 @@ export { ToastProvider, useToast } from './toast/ToastProvider';
 export { CommandPalette } from './command-palette/CommandPalette';
 export { CheatSheet } from './cheat-sheet/CheatSheet';
 export { Changelog } from './changelog/Changelog';
+export { HowItWorks, CoreLoop } from './guide/HowItWorks';
+export { FreeKeyCallout, GetKeyLink } from './ProviderKeyHint';
 export {
   NavItem,
   Group,

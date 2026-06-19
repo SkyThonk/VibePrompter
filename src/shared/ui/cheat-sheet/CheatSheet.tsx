@@ -141,6 +141,31 @@ export function CheatSheet() {
           </span>
         </div>
 
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            window.dispatchEvent(new Event('app:show-guide'));
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            width: '100%',
+            textAlign: 'left',
+            padding: '10px 16px',
+            background: 'transparent',
+            border: 'none',
+            borderBottom: '.5px solid var(--divider)',
+            color: 'var(--accent)',
+            cursor: 'pointer',
+            fontSize: 12.5,
+          }}
+        >
+          <I.sparkles size={13} />
+          New here? See how VibePrompter works
+        </button>
+
         <div style={{ overflow: 'auto', padding: '8px 0' }}>
           {GROUPS.map((g) => (
             <div key={g.title} style={{ padding: '10px 16px 14px' }}>

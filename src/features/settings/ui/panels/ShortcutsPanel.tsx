@@ -133,8 +133,11 @@ export function ShortcutsPanel() {
       />
 
       <Hint icon={<I.info size={13} />} tone="info">
-        Click <b>Edit</b> next to a shortcut, then press the combo you want.
-        Esc cancels. The backend warns about conflicts before you commit.
+        Each shortcut fires an <b>action</b>, not a fixed prompt. <b>Rewrite</b> runs
+        your <i>active mode</i> (change it on the dashboard or in Modes); <b>Grammar</b>
+        and <b>Summarize</b> use their own built-in prompts. To rebind: click{' '}
+        <b>Edit</b>, press the combo you want — Esc cancels, and conflicts are flagged
+        before you commit.
       </Hint>
 
       <div className="mt-4">

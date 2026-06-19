@@ -15,19 +15,61 @@ impl HistoryRepo {
         Self { pool }
     }
 
-    /// List history newest-first, paginated.
+    /// List top-level history newest-first, paginated. Tweaks/followups
+    /// (`parent_id IS NOT NULL`) are excluded — they belong to a thread and are
+    /// fetched via `children_of` when their root is opened. Pagination therefore
+    /// pages over refines, not over every tweak.
     pub async fn list(&self, query: &HistoryQuery) -> AppResult<Vec<HistoryItem>> {
         // Favorites sort to the top of each page first, then by recency.
         // Within favorites or non-favorites, newest-first.
         let items: Vec<HistoryItem> = sqlx::query_as(
             "SELECT id, mode_name, icon_name, provider_label, source_text, output_text,
-                    latency_ms, favorite, created_at, input_tokens, output_tokens, cost_micros
+                    latency_ms, favorite, created_at, input_tokens, output_tokens, cost_micros,
+                    parent_id
+             FROM history
+             WHERE parent_id IS NULL
+             ORDER BY favorite DESC, created_at DESC, id DESC
+             LIMIT ?1 OFFSET ?2",
+        )
+        .bind(query.limit)
+        .bind(query.offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(items)
+    }
+
+    /// List every row including tweaks, newest-first. Used by export so a
+    /// JSON dump contains the full history; `parent_id` on each row keeps the
+    /// thread structure reconstructable.
+    pub async fn list_all(&self, query: &HistoryQuery) -> AppResult<Vec<HistoryItem>> {
+        let items: Vec<HistoryItem> = sqlx::query_as(
+            "SELECT id, mode_name, icon_name, provider_label, source_text, output_text,
+                    latency_ms, favorite, created_at, input_tokens, output_tokens, cost_micros,
+                    parent_id
              FROM history
              ORDER BY favorite DESC, created_at DESC, id DESC
              LIMIT ?1 OFFSET ?2",
         )
         .bind(query.limit)
         .bind(query.offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(items)
+    }
+
+    /// Fetch a thread's tweaks/followups oldest-first (chronological order), so
+    /// the detail pane can render the conversation original → result → tweak →
+    /// result. Returns an empty vec when the entry has no tweaks.
+    pub async fn children_of(&self, parent_id: i64) -> AppResult<Vec<HistoryItem>> {
+        let items: Vec<HistoryItem> = sqlx::query_as(
+            "SELECT id, mode_name, icon_name, provider_label, source_text, output_text,
+                    latency_ms, favorite, created_at, input_tokens, output_tokens, cost_micros,
+                    parent_id
+             FROM history
+             WHERE parent_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )
+        .bind(parent_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(items)
@@ -40,8 +82,8 @@ impl HistoryRepo {
         let id = sqlx::query(
             "INSERT INTO history
                (mode_name, icon_name, provider_label, source_text, output_text, latency_ms,
-                created_at, input_tokens, output_tokens, cost_micros)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                created_at, input_tokens, output_tokens, cost_micros, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(&item.mode_name)
         .bind(&item.icon_name)
@@ -53,6 +95,7 @@ impl HistoryRepo {
         .bind(item.input_tokens)
         .bind(item.output_tokens)
         .bind(item.cost_micros)
+        .bind(item.parent_id)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
@@ -188,6 +231,22 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_micros: 0,
+            parent_id: None,
+        }
+    }
+
+    fn child_of(parent_id: i64) -> NewHistoryItem {
+        NewHistoryItem {
+            mode_name: "Developer".into(),
+            icon_name: "code".into(),
+            provider_label: "GPT-4.1".into(),
+            source_text: "make it shorter".into(),
+            output_text: "shorter out".into(),
+            latency_ms: 800,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_micros: 0,
+            parent_id: Some(parent_id),
         }
     }
 
@@ -220,6 +279,40 @@ mod tests {
         }
         let q = HistoryQuery { limit: 2, offset: 0 };
         assert_eq!(repo.list(&q).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_excludes_tweaks_and_children_of_returns_them() {
+        let repo = HistoryRepo::new(test_pool().await);
+        let root = repo.insert(&sample()).await.unwrap();
+        let c1 = repo.insert(&child_of(root)).await.unwrap();
+        let c2 = repo.insert(&child_of(root)).await.unwrap();
+
+        // The top-level list shows only the root, not its tweaks.
+        let listed = repo.list(&HistoryQuery::default()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, root);
+        assert_eq!(listed[0].parent_id, None);
+
+        // children_of returns the tweaks oldest-first.
+        let children = repo.children_of(root).await.unwrap();
+        assert_eq!(children.iter().map(|c| c.id).collect::<Vec<_>>(), vec![c1, c2]);
+        assert!(children.iter().all(|c| c.parent_id == Some(root)));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_root_cascades_to_its_tweaks() {
+        let repo = HistoryRepo::new(test_pool().await);
+        let root = repo.insert(&sample()).await.unwrap();
+        repo.insert(&child_of(root)).await.unwrap();
+        // clear() wipes everything, so target the root directly to prove the
+        // ON DELETE CASCADE foreign key removes the child too.
+        sqlx::query("DELETE FROM history WHERE id = ?1")
+            .bind(root)
+            .execute(&repo.pool)
+            .await
+            .unwrap();
+        assert_eq!(repo.count().await.unwrap(), 0);
     }
 
     #[tokio::test]

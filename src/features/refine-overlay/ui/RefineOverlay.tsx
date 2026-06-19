@@ -534,6 +534,8 @@ export function RefineOverlay() {
           <FollowupBar onSend={(instruction) => invoke('refine_followup', { instruction })} />
         )}
 
+        {done && !error && <OverlayFirstTip summarize={isSummarize} />}
+
         <div
           style={{
             display: 'flex',
@@ -1094,5 +1096,82 @@ function BulletBlock({ text, showCaret }: { text: string; showCaret: boolean }) 
         );
       })}
     </>
+  );
+}
+
+/**
+ * One-time orientation line shown the first few times the overlay produces a
+ * result, so new users learn what the buttons do. Gated by a localStorage
+ * counter (shared across the app's webviews) — shows three times, then never
+ * again. No backend round-trip; the HUD stays snappy.
+ */
+function OverlayFirstTip({ summarize }: { summarize: boolean }) {
+  const KEY = 'vp_overlay_tip_shown';
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    let count = 0;
+    try {
+      count = Number(localStorage.getItem(KEY) ?? '0') || 0;
+    } catch {
+      return; // localStorage unavailable — skip the tip rather than risk throwing.
+    }
+    if (count < 3) {
+      setShow(true);
+      try {
+        localStorage.setItem(KEY, String(count + 1));
+      } catch {
+        /* best-effort */
+      }
+    }
+  }, []);
+
+  if (!show) return null;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 10px',
+        fontSize: 11,
+        color: 'var(--fg-dim)',
+        borderTop: '.5px solid var(--divider)',
+        background: 'var(--surface)',
+      }}
+    >
+      <I.info size={11} style={{ flexShrink: 0, color: 'var(--accent)' }} />
+      {summarize ? (
+        <span>
+          Press <TipKey>Enter</TipKey> to copy the summary, or <TipKey>Esc</TipKey> to
+          dismiss.
+        </span>
+      ) : (
+        <span>
+          <TipKey>Enter</TipKey> replaces your selection · <TipKey>Copy</TipKey> if the
+          app won't paste · type above to tweak the result.
+        </span>
+      )}
+    </div>
+  );
+}
+
+function TipKey({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd
+      style={{
+        fontFamily: 'var(--mono)',
+        fontSize: 10,
+        padding: '1px 4px',
+        borderRadius: 4,
+        background: 'var(--surface-2)',
+        border: '.5px solid var(--border-strong)',
+        color: 'var(--fg-strong)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </kbd>
   );
 }

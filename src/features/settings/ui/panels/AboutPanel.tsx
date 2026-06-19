@@ -59,6 +59,11 @@ export function AboutPanel() {
     toast.ok(`${label} copied`);
   };
 
+  const openExternal = (url: string) =>
+    invokeCommand<void>('open_url', { url }).catch((e) =>
+      toast.err(String(e), 'Could not open link')
+    );
+
   return (
     <div className="flex flex-col gap-6">
       <PanelHead
@@ -79,13 +84,23 @@ export function AboutPanel() {
               {diag ? diag.version : '…'}
             </div>
           </div>
-          <PhButton
-            size="sm"
-            variant="ghost"
-            onClick={() => window.dispatchEvent(new Event('app:show-changelog'))}
-          >
-            What's new
-          </PhButton>
+          <div className="flex items-center gap-1.5">
+            <PhButton
+              size="sm"
+              variant="ghost"
+              icon={<I.sparkles size={11} />}
+              onClick={() => window.dispatchEvent(new Event('app:show-guide'))}
+            >
+              How it works
+            </PhButton>
+            <PhButton
+              size="sm"
+              variant="ghost"
+              onClick={() => window.dispatchEvent(new Event('app:show-changelog'))}
+            >
+              What's new
+            </PhButton>
+          </div>
         </div>
         <InfoCard label="Platform" value={diag ? diag.buildTarget : '…'} />
       </div>
@@ -150,6 +165,58 @@ export function AboutPanel() {
               }
             >
               Privacy Policy
+            </PhButton>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="rounded-lg p-4 flex items-start gap-3"
+        style={{ background: 'var(--surface)', border: '.5px solid var(--border)' }}
+      >
+        <span
+          className="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0"
+          style={{ background: 'var(--accent-tint)', color: 'var(--accent)' }}
+        >
+          <I.star size={14} />
+        </span>
+        <div className="flex-1 min-w-0 text-[12px] text-fg-mute leading-relaxed">
+          <div className="text-[12.5px] font-semibold text-fg-strong mb-1">
+            VibePrompter is open source — contributions welcome
+          </div>
+          Hit a bug, want a feature, or fancy improving the code? The project lives on
+          GitHub. Star it to follow along, open an issue, or send a pull request —
+          every bit helps.
+          <div className="mt-3 flex flex-wrap gap-2">
+            <PhButton
+              size="sm"
+              variant="ghost"
+              icon={<I.star size={11} />}
+              onClick={() => openExternal('https://github.com/SkyThonk/VibePrompter')}
+            >
+              Star on GitHub
+            </PhButton>
+            <PhButton
+              size="sm"
+              variant="ghost"
+              icon={<I.info size={11} />}
+              onClick={() =>
+                openExternal('https://github.com/SkyThonk/VibePrompter/issues/new')
+              }
+            >
+              Report an issue
+            </PhButton>
+            <PhButton
+              size="sm"
+              variant="ghost"
+              icon={<I.code size={11} />}
+              onClick={() =>
+                openExternal(
+                  'https://github.com/SkyThonk/VibePrompter/blob/main/CONTRIBUTING.md'
+                )
+              }
+            >
+              Contributing guide
             </PhButton>
           </div>
         </div>

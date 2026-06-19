@@ -15,6 +15,16 @@ pub async fn get_history(
     state.history.list(query.unwrap_or_default()).await
 }
 
+/// Tweaks/followups nested under a history entry, oldest-first. Returns an
+/// empty list for entries that were never tweaked.
+#[tauri::command]
+pub async fn get_history_children(
+    state: State<'_, AppState>,
+    parent_id: i64,
+) -> Result<Vec<HistoryItem>, AppError> {
+    state.history.children_of(parent_id).await
+}
+
 #[tauri::command]
 pub async fn clear_history(state: State<'_, AppState>) -> Result<u64, AppError> {
     state.history.clear().await
@@ -130,7 +140,7 @@ pub async fn export_history(
 ) -> Result<serde_json::Value, AppError> {
     let items = state
         .history
-        .list(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
+        .list_all(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
         .await?;
     Ok(serde_json::json!({
         "schema": "vibeprompter-history-v1",
@@ -173,7 +183,7 @@ pub async fn export_history_to_file(
 
     let items = state
         .history
-        .list(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
+        .list_all(crate::models::HistoryQuery { limit: 100_000, offset: 0 })
         .await?;
     let payload = serde_json::json!({
         "schema": "vibeprompter-history-v1",

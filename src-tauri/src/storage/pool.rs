@@ -98,7 +98,12 @@ pub async fn backup_before_migrations(pool: &SqlitePool, db_path: &Path) -> AppR
 #[cfg(test)]
 pub async fn test_pool() -> SqlitePool {
     use std::str::FromStr;
-    let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+    // Mirror production's connect options that affect behavior under test —
+    // notably `foreign_keys(true)`, so ON DELETE CASCADE (history threads) is
+    // enforced in tests exactly as it is at runtime.
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)

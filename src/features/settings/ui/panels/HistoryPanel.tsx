@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import { EmptyState, I, Kbd, PanelHead, PhButton, PhInput, Pill, useToast, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
-import { useHistoryQuery } from '../../application/settings.query';
+import { useHistoryQuery, useHistoryChildrenQuery } from '../../application/settings.query';
 import { relativeTimeAgo } from '@shared/lib/date';
 import { errorMessage } from '@shared/lib/utils';
 
@@ -49,6 +49,9 @@ export function HistoryPanel() {
     let unlisten: (() => void) | null = null;
     listen('history_changed', () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'history'] });
+      // Tweaks land via the same event — refresh open threads too (separate
+      // key prefix, so it isn't covered by the invalidation above).
+      queryClient.invalidateQueries({ queryKey: ['settings', 'history-children'] });
     }).then((u) => {
       unlisten = u;
     });
@@ -209,6 +212,8 @@ export function HistoryPanel() {
         x.out.toLowerCase().includes(q.toLowerCase()))
   );
   const current = history.find((x) => x.id === sel) ?? history[0];
+  // Tweaks/followups nested under the selected entry, rendered as a thread.
+  const { data: tweaks = [] } = useHistoryChildrenQuery(current?.id ?? null);
   // Selection changed → wipe any stale re-run result from the previous row.
   useEffect(() => {
     setRerunResult(null);
@@ -466,6 +471,11 @@ export function HistoryPanel() {
               <Pill tone="accent" icon={CurIcon ? <CurIcon size={12} /> : null}>
                 {current.mode}
               </Pill>
+              {tweaks.length > 0 && (
+                <Pill icon={<I.wand size={11} />}>
+                  {tweaks.length} tweak{tweaks.length === 1 ? '' : 's'}
+                </Pill>
+              )}
               <span className="text-fg-dim flex-shrink-0">·</span>
               <span
                 className="ph-mono text-[11.5px] text-fg-mute truncate min-w-0"
@@ -635,6 +645,43 @@ export function HistoryPanel() {
               {current.out}
             </div>
           </div>
+
+          {tweaks.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div style={labelStyle}>Tweaks</div>
+              {tweaks.map((t) => (
+                <div key={t.id} className="flex flex-col gap-1.5">
+                  <div
+                    className="px-3 py-2 text-[12.5px] text-fg-mute whitespace-pre-wrap inline-flex gap-2"
+                    style={{
+                      background: 'var(--surface-2)',
+                      border: '.5px solid var(--border)',
+                      borderRadius: 'var(--r-md)',
+                      lineHeight: 1.5,
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    <I.wand size={13} style={{ flexShrink: 0, marginTop: 2, color: 'var(--accent)' }} />
+                    <span>{t.src}</span>
+                  </div>
+                  <div
+                    className="px-3.5 py-2.5 text-[13px] text-fg whitespace-pre-wrap"
+                    style={{
+                      background: 'var(--accent-tint)',
+                      border: '.5px solid var(--accent-tint-2)',
+                      borderRadius: 'var(--r-md)',
+                      lineHeight: 1.55,
+                      maxHeight: 240,
+                      overflow: 'auto',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {t.out}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div
             className="mt-auto flex gap-3 items-center px-3 py-2.5 text-[11.5px] text-fg-mute"

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { I, PhButton, PhInput } from '@shared/ui';
+import { I, PhButton, PhInput, FreeKeyCallout, GetKeyLink } from '@shared/ui';
+import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { Field } from './Field';
 import { PRESETS, type ConnectionDraft } from './connection';
 import { isValidBaseUrl, isValidJsonObject, keyFormatHint } from './validation';
@@ -32,6 +33,13 @@ export function ConnectionEditor({
   onSave,
 }: ConnectionEditorProps) {
   const presetEntries = useMemo(() => Object.entries(PRESETS), []);
+  // Match the draft's base URL back to a preset id so we can deep-link to that
+  // vendor's API-key page. Null for custom/unknown endpoints.
+  const providerId =
+    presetEntries.find(([, p]) => p.baseUrl === draft.baseUrl.trim())?.[0] ?? null;
+  const openUrl = (url: string) => {
+    invokeCommand<void>('open_url', { url }).catch(() => {});
+  };
 
   return (
     <div
@@ -119,6 +127,8 @@ export function ConnectionEditor({
         </div>
       </div>
 
+      {!draft.id && <FreeKeyCallout onOpenUrl={openUrl} />}
+
       <Field label="Label">
         <PhInput
           value={draft.label}
@@ -205,6 +215,11 @@ export function ConnectionEditor({
             </span>
           ) : null;
         })()}
+        {providerId && (
+          <div className="mt-1.5">
+            <GetKeyLink providerId={providerId} onOpenUrl={openUrl} />
+          </div>
+        )}
       </Field>
 
       <Field label="Default model">

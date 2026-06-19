@@ -234,6 +234,7 @@ pub async fn run_prompt_stream(
                     input_tokens: r.usage.input_tokens as i64,
                     output_tokens: r.usage.output_tokens as i64,
                     cost_micros,
+                    parent_id: None,
                 })
                 .await;
             Ok(())

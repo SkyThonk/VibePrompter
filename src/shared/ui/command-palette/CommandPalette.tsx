@@ -82,6 +82,15 @@ export function CommandPalette() {
   const commands = useMemo<Command[]>(() => {
     const nav: Command[] = [
       { id: 'go.home', label: 'Go to Dashboard', iconName: 'wand', run: () => navigate('/app') },
+      {
+        id: 'help.guide',
+        label: 'How it works (guide)',
+        iconName: 'sparkles',
+        search: 'help guide how it works tutorial getting started learn',
+        run: () => {
+          window.dispatchEvent(new Event('app:show-guide'));
+        },
+      },
       { id: 'go.settings', label: 'Open Settings', iconName: 'cog', hint: 'Ctrl+,', run: () => navigate('/settings') },
       { id: 'go.providers', label: 'Manage connections', iconName: 'cloud', run: () => navigate('/settings/providers') },
       { id: 'go.modes', label: 'Manage modes', iconName: 'layers', run: () => navigate('/settings/modes') },

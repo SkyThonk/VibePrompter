@@ -202,10 +202,16 @@ pub async fn initialize(app: &App) -> AppResult<()> {
     // explicitly via the tray menu's "Quit" item. This matches how Slack,
     // Discord, Raycast on Windows behave — the app stays resident so the
     // global hotkey keeps working.
-    // If we were launched by the OS at login (autostart plugin passed
-    // `--autostart` in argv), hide the main window so we sit in the tray.
+    // If we were launched by the OS at login, hide the main window so we sit in
+    // the tray. Two launch paths, two signals:
+    //   * Registry autostart (non-Store builds): the autostart plugin passes
+    //     `--autostart` in argv.
+    //   * MSIX StartupTask (Store builds): no argv flag is possible, so we ask
+    //     Windows for the activation kind instead.
     // Manual launches keep the window visible — same UX as Slack/Discord.
     let launched_via_autostart = std::env::args().any(|a| a == "--autostart");
+    #[cfg(target_os = "windows")]
+    let launched_via_autostart = launched_via_autostart || launched_via_msix_startup();
     if let Some(win) = app.get_webview_window("main") {
         if launched_via_autostart {
             let _ = win.hide();
@@ -357,6 +363,29 @@ fn apply_devtools(app: &AppHandle, want_open: bool) {
     #[cfg(not(debug_assertions))]
     {
         let _ = (app, want_open); // silence unused warnings in release
+    }
+}
+
+/// True if this process was launched by the OS at login via the MSIX
+/// StartupTask (TaskId `VibePrompterStartup`).
+///
+/// MSIX installs don't get the `--autostart` argv flag — that flag only comes
+/// from the registry-based `tauri-plugin-autostart` launcher, which we skip for
+/// Store builds (see `apply_autostart`). The StartupTask launches the exe with
+/// no arguments, so argv alone can't tell a login-launch from a manual click.
+/// Instead we ask Windows for the activation kind: packaged desktop apps can
+/// call `AppInstance::GetActivatedEventArgs` (Windows 10 1809+) and inspect
+/// `Kind` — `StartupTask` means the OS started us at login.
+///
+/// Returns false on any error (not packaged → no package identity, API
+/// unavailable, etc.), so non-MSIX builds fall back to the `--autostart` check.
+#[cfg(target_os = "windows")]
+fn launched_via_msix_startup() -> bool {
+    use windows::ApplicationModel::AppInstance;
+    use windows::ApplicationModel::Activation::ActivationKind;
+    match AppInstance::GetActivatedEventArgs().and_then(|args| args.Kind()) {
+        Ok(kind) => kind == ActivationKind::StartupTask,
+        Err(_) => false,
     }
 }
 

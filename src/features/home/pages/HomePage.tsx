@@ -5,7 +5,7 @@ import { I, PhButton, useToast, AppIcon, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { relativeTimeAgo } from '@shared/lib/date';
 import { CostCard } from '../ui/CostCard';
-import { HotkeyTipCard } from '../ui/HotkeyTipCard';
+import { HowToUseCard } from '../ui/HowToUseCard';
 import { DashboardSkeleton } from '../ui/DashboardSkeleton';
 import { conflictsFor, formatCost, humanizeAction, nextMode } from '../ui/helpers';
 import type {
@@ -44,7 +44,7 @@ export function HomePage() {
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
-  const [showHotkeyTip, setShowHotkeyTip] = useState(false);
+  const [howToCollapsed, setHowToCollapsed] = useState(false);
   // Tracks whether the initial parallel fetch batch has resolved. Until it
   // flips true, empty arrays / null states are indistinguishable from "still
   // loading", so each section renders a shimmer skeleton instead of its
@@ -87,11 +87,23 @@ export function HomePage() {
       invokeCommand<HealthReport>('run_health_check').then(setHealth),
       invokeCommand<CostSummary>('get_cost_summary').then(setCost),
       invokeCommand<CostBreakdown>('get_cost_breakdown', { days: 30 }).then(setCostBreakdown),
-      // First-run tip: show the "select text anywhere → press the hotkey"
-      // banner once, until the user dismisses it. The flag lives in the
-      // settings KV so it survives across restarts.
-      invokeCommand<string | null>('get_kv', { key: 'hotkey_tip_dismissed' }).then((v) => {
-        if (!v) setShowHotkeyTip(true);
+      // The "How to use" card is always on the dashboard (the core flow lives
+      // outside this window, so we keep it one glance away). Persist only its
+      // collapsed/expanded state — expanded by default for newcomers.
+      invokeCommand<string | null>('get_kv', { key: 'howto_collapsed' }).then((v) => {
+        if (v && JSON.parse(v) === true) setHowToCollapsed(true);
+      }),
+      // Right after onboarding, show the "How it works" guide once. Onboarding
+      // sets this flag; we consume + clear it so it never re-fires on later
+      // launches. Returning users open the guide on demand from the header.
+      invokeCommand<string | null>('get_kv', { key: 'guide_after_onboarding' }).then((v) => {
+        if (v && JSON.parse(v) === true) {
+          window.setTimeout(() => window.dispatchEvent(new Event('app:show-guide')), 450);
+          invokeCommand<void>('set_kv', {
+            key: 'guide_after_onboarding',
+            value: JSON.stringify(false),
+          }).catch(() => {});
+        }
       }),
     ]).finally(() => setBootLoaded(true));
 
@@ -212,6 +224,15 @@ export function HomePage() {
             <PhButton
               variant="ghost"
               size="md"
+              icon={<I.sparkles size={14} />}
+              onClick={() => window.dispatchEvent(new Event('app:show-guide'))}
+              title="See how VibePrompter works"
+            >
+              How it works
+            </PhButton>
+            <PhButton
+              variant="ghost"
+              size="md"
               icon={<I.layers size={14} />}
               onClick={() => navigate('/settings/modes')}
               title="Manage prompt modes"
@@ -232,15 +253,18 @@ export function HomePage() {
 
         {!bootLoaded && <DashboardSkeleton />}
 
-        {bootLoaded && showHotkeyTip && connections.length > 0 && (
-          <HotkeyTipCard
-            onDismiss={() => {
-              setShowHotkeyTip(false);
+        {bootLoaded && (
+          <HowToUseCard
+            collapsed={howToCollapsed}
+            onToggle={() => {
+              const next = !howToCollapsed;
+              setHowToCollapsed(next);
               invokeCommand<void>('set_kv', {
-                key: 'hotkey_tip_dismissed',
-                value: JSON.stringify(true),
+                key: 'howto_collapsed',
+                value: JSON.stringify(next),
               }).catch(() => {});
             }}
+            onOpenGuide={() => window.dispatchEvent(new Event('app:show-guide'))}
           />
         )}
 
