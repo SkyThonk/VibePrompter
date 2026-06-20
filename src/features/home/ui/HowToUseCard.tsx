@@ -1,4 +1,5 @@
 import { I, CoreLoop } from '@shared/ui';
+import { useShortcuts } from '@shared/lib';
 
 /**
  * Persistent "How to use VibePrompter" card on the dashboard. The app's main
@@ -19,6 +20,7 @@ export function HowToUseCard({
   onToggle: () => void;
   onOpenGuide: () => void;
 }) {
+  const { accel } = useShortcuts();
   return (
     <section
       className="rounded-xl p-5 flex flex-col gap-3"
@@ -83,17 +85,17 @@ export function HowToUseCard({
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
             <TipHotkey
-              accel="Ctrl+Alt+F"
+              accel={accel('rewrite')}
               label="Rewrite"
               hint="Polishes the selection using your active mode."
             />
             <TipHotkey
-              accel="Ctrl+Alt+G"
+              accel={accel('grammar')}
               label="Fix grammar"
               hint="Corrects typos and grammar without changing style."
             />
             <TipHotkey
-              accel="Ctrl+Alt+S"
+              accel={accel('summary')}
               label="Summarize"
               hint="Bulleted summary of long text. Copies to clipboard."
             />

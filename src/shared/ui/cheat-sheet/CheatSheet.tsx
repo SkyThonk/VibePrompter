@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { prettyAccel, useShortcuts } from '@shared/lib/shortcuts';
 import { I } from '../Icon';
 
 /**
@@ -8,8 +9,10 @@ import { I } from '../Icon';
  * because we read it from the running shortcut bindings + hardcoded
  * window-scoped keys.
  *
- * Static categories: keeping things grouped manually beats trying to
- * derive everything from backend state for a UI surface this small.
+ * The "Global" group is the user's *actual* rebindable hotkeys, read live from
+ * the shortcut bindings — so a custom combo shows here, never the stale default.
+ * The remaining groups are window-scoped webview keys that aren't rebindable,
+ * so they stay static.
  */
 interface Row {
   keys: string;
@@ -20,17 +23,24 @@ interface Group {
   rows: Row[];
 }
 
-const GROUPS: Group[] = [
-  {
-    title: 'Global (work in any app)',
-    rows: [
-      { keys: 'Ctrl + Shift + Space', label: 'Toggle VibePrompter window' },
-      { keys: 'Ctrl + Shift + M', label: 'Cycle active prompt mode' },
-      { keys: 'Ctrl + Shift + R', label: 'Rewrite selection (refine overlay)' },
-      { keys: 'Ctrl + Shift + G', label: 'Fix grammar on selection' },
-      { keys: 'Ctrl + Shift + S', label: 'Summarize selection' },
-    ],
-  },
+/**
+ * Clearer wording for the rebindable global hotkeys than the raw DB labels
+ * (e.g. the `palette` shortcut's action toggles the window — it does NOT open
+ * the Ctrl+K command palette — so "Toggle VibePrompter window" is truer than
+ * the stored "Open Command Palette"). Keyed by shortcut id; the accelerator
+ * itself is always read live, so a custom binding shows here. Ids without an
+ * entry fall back to their backend label.
+ */
+const GLOBAL_LABELS: Record<string, string> = {
+  palette: 'Toggle VibePrompter window',
+  modes: 'Cycle active prompt mode',
+  rewrite: 'Rewrite selection',
+  grammar: 'Fix grammar on selection',
+  summary: 'Summarize selection',
+};
+
+// Window-scoped keys handled inside the webview — not rebindable, so static.
+const STATIC_GROUPS: Group[] = [
   {
     title: 'Main window',
     rows: [
@@ -66,6 +76,18 @@ const GROUPS: Group[] = [
 
 export function CheatSheet() {
   const [open, setOpen] = useState(false);
+  const { items } = useShortcuts();
+
+  // The rebindable global hotkeys, straight from the live bindings. Falls back
+  // to nothing-rendered until the query resolves; the static groups still show.
+  const globalGroup: Group = {
+    title: 'Global (work in any app)',
+    rows: items.map((s) => ({
+      keys: prettyAccel(s.accelerator),
+      label: GLOBAL_LABELS[s.id] ?? s.label,
+    })),
+  };
+  const groups = globalGroup.rows.length ? [globalGroup, ...STATIC_GROUPS] : STATIC_GROUPS;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -167,7 +189,7 @@ export function CheatSheet() {
         </button>
 
         <div style={{ overflow: 'auto', padding: '8px 0' }}>
-          {GROUPS.map((g) => (
+          {groups.map((g) => (
             <div key={g.title} style={{ padding: '10px 16px 14px' }}>
               <div
                 style={{

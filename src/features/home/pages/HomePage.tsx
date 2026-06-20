@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { I, PhButton, useToast, AppIcon, type IconName } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { relativeTimeAgo } from '@shared/lib/date';
+import { useShortcuts } from '@shared/lib';
 import { CostCard } from '../ui/CostCard';
 import { HowToUseCard } from '../ui/HowToUseCard';
 import { DashboardSkeleton } from '../ui/DashboardSkeleton';
@@ -36,6 +37,7 @@ import type {
 export function HomePage() {
   const navigate = useNavigate();
   const toast = useToast();
+  const { accel } = useShortcuts();
   const [active, setActive] = useState<ActiveMode | null>(null);
   const [modes, setModes] = useState<CatalogMode[]>([]);
   const [shortcuts, setShortcuts] = useState<ShortcutBinding[]>([]);
@@ -355,7 +357,7 @@ export function HomePage() {
                       }}
                       title="Press anywhere to rewrite the selected text in any app"
                     >
-                      Ctrl+Alt+F
+                      {accel('rewrite')}
                     </kbd>
                   </div>
                   <div className="text-[20px] font-semibold text-fg-strong leading-tight mt-0.5">
@@ -367,7 +369,7 @@ export function HomePage() {
                     </div>
                   )}
                   <div className="text-[11px] text-fg-dim mt-1">
-                    Grammar (Ctrl+Alt+G) and Summarize (Ctrl+Alt+S) have their own dedicated prompts and ignore this setting.
+                    Grammar ({accel('grammar')}) and Summarize ({accel('summary')}) have their own dedicated prompts and ignore this setting.
                   </div>
                 </div>
                 <PhButton
@@ -375,7 +377,7 @@ export function HomePage() {
                   size="md"
                   icon={<I.refresh size={14} />}
                   onClick={cycleMode}
-                  title="Cycle to next mode (Ctrl+Alt+M globally, Ctrl+M in-window)"
+                  title={`Cycle to next mode (${accel('modes')} globally, Ctrl+M in-window)`}
                 >
                   {nextMode(active, modes)
                     ? `Cycle → ${nextMode(active, modes)!.name}`
@@ -750,7 +752,7 @@ export function HomePage() {
                       border: '.5px solid var(--border-strong)',
                     }}
                   >
-                    Ctrl+Alt+V
+                    {accel('palette')}
                   </kbd>{' '}
                   anywhere to open the app, or{' '}
                   <kbd
@@ -760,7 +762,7 @@ export function HomePage() {
                       border: '.5px solid var(--border-strong)',
                     }}
                   >
-                    Ctrl+Alt+F
+                    {accel('rewrite')}
                   </kbd>{' '}
                   to refine highlighted text in any app.
                 </div>

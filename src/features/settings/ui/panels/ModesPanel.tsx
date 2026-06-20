@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Hint, I, PanelHead, PhButton, PhInput } from '@shared/ui';
 import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { errorMessage } from '@shared/lib/utils';
+import { useShortcuts } from '@shared/lib';
 import { blank, slugify, type ActiveMode, type Connection, type Mode, type Template } from './modes/types';
 import { Section } from './modes/Section';
 import { TemplatePicker } from './modes/TemplatePicker';
@@ -20,6 +21,7 @@ import { ModeEditor } from './modes/ModeEditor';
  * live in `./modes/*`.
  */
 export function ModesPanel() {
+  const { accel } = useShortcuts();
   const [modes, setModes] = useState<Mode[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [active, setActive] = useState<ActiveMode | null>(null);
@@ -156,7 +158,7 @@ export function ModesPanel() {
 
       {!draft && (
         <Hint icon={<I.info size={13} />} tone="info">
-          The <b>active mode</b> is what your Rewrite hotkey (Ctrl+Alt+F) runs. Edit a
+          The <b>active mode</b> is what your Rewrite hotkey ({accel('rewrite')}) runs. Edit a
           mode's system prompt to change <i>how</i> it rewrites — or create modes for
           different jobs (a “formal email” one, a “concise” one) and switch between them.{' '}
           <button

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useShortcuts } from '@shared/lib/shortcuts';
 import { I } from '../Icon';
 
 /**
@@ -15,6 +16,7 @@ import { I } from '../Icon';
  */
 export function HowItWorks() {
   const navigate = useNavigate();
+  const { pretty } = useShortcuts();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -113,12 +115,12 @@ export function HowItWorks() {
             A <strong className="text-fg">Mode</strong> is a saved prompt plus model
             settings — it decides <em>how</em> your text gets rewritten. The{' '}
             <strong className="text-fg">active mode</strong> is what the Rewrite
-            hotkey (<Combo k="Ctrl + Alt + F" />) runs. Grammar and Summarize are
+            hotkey (<Combo k={pretty('rewrite')} />) runs. Grammar and Summarize are
             their own built-in modes on their own keys.
             <div className="mt-2 text-fg-dim">
               Want a “Formal email” rewrite and a “Punchy & concise” rewrite? Make a
               mode for each, then switch between them from the dashboard or with{' '}
-              <Combo k="Ctrl + Shift + M" />.
+              <Combo k={pretty('modes')} />.
             </div>
           </Block>
 
@@ -203,6 +205,7 @@ const pillBtn: React.CSSProperties = {
  * dashboard's "How to use" card so the two never tell a different story.
  */
 export function CoreLoop() {
+  const { pretty } = useShortcuts();
   return (
     <div className="flex flex-col gap-2.5">
       <Step
@@ -215,9 +218,9 @@ export function CoreLoop() {
         title="Press a hotkey"
         body={
           <span className="flex flex-wrap items-center gap-1.5">
-            <Combo k="Ctrl + Alt + F" /> rewrite ·
-            <Combo k="Ctrl + Alt + G" /> fix grammar ·
-            <Combo k="Ctrl + Alt + S" /> summarize
+            <Combo k={pretty('rewrite')} /> rewrite ·
+            <Combo k={pretty('grammar')} /> fix grammar ·
+            <Combo k={pretty('summary')} /> summarize
           </span>
         }
       />

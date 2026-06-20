@@ -6,6 +6,7 @@ import { invokeCommand } from '@kernel/infrastructure/tauri';
 import { useHistoryQuery, useHistoryChildrenQuery } from '../../application/settings.query';
 import { relativeTimeAgo } from '@shared/lib/date';
 import { errorMessage } from '@shared/lib/utils';
+import { useShortcuts } from '@shared/lib';
 
 const labelStyle: React.CSSProperties = {
   fontSize: 11,
@@ -18,6 +19,7 @@ const labelStyle: React.CSSProperties = {
 export function HistoryPanel() {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const { accel } = useShortcuts();
   const [pageSize, setPageSize] = useState(50);
   const { data: history = [], isLoading } = useHistoryQuery(pageSize, 0);
   const [q, setQ] = useState('');
@@ -124,7 +126,7 @@ export function HistoryPanel() {
       }
     } catch { /* mode switch is best-effort */ }
     toast.ok(
-      `Original input copied. Paste anywhere and press Ctrl+Alt+F${
+      `Original input copied. Paste anywhere and press ${accel('rewrite')}${
         item.mode ? ` (${item.mode} mode)` : ''
       }.`
     );

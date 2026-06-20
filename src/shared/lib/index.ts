@@ -15,3 +15,13 @@ export * as numberUtils from './number';
 
 // Theme utilities
 export { ThemeProvider, useTheme } from './theme';
+
+// Live global-shortcut bindings (read-only hint surfaces)
+export {
+  useShortcuts,
+  prettyAccel,
+  SHORTCUT_DEFAULTS,
+  type ShortcutId,
+  type ShortcutItem,
+  type ShortcutLookup,
+} from './shortcuts';
